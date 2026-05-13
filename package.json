@@ -1,0 +1,18 @@
+{
+  "name": "edit-pdf",
+  "version": "0.1.0",
+  "description": "PDF 文字编辑系统 - Figma 式双击编辑体验",
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "dev:s": "cd backend && uv run uvicorn app.main:app --reload --port 8000",
+    "dev:all": "npm run dev:s & npm run dev",
+    "build": "cd frontend && npm run build",
+    "build:backend": "cd backend && uv sync",
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && uv sync",
+    "install:all": "npm run install:frontend && npm run install:backend"
+  },
+  "keywords": ["pdf", "editor", "react", "fastapi"],
+  "author": "",
+  "license": "MIT"
+}

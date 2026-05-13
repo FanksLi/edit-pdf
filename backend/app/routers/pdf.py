@@ -31,19 +31,20 @@ async def upload_pdf(file: UploadFile = File(...)):
     # 检查文件是否为空
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty file not allowed")
-    temp_path = UPLOAD_DIR / f"temp_{file.filename}"
 
-    with open(temp_path, "wb") as f:
-        f.write(file_bytes)
+    # 先生成 file_id，直接用 file_id 命名写入，避免 Windows 上 rename 占用问题
+    import uuid
+    file_id = uuid.uuid4().hex
+    final_path = UPLOAD_DIR / f"{file_id}.pdf"
 
     try:
-        # 创建 PDFService
-        service = PDFService(str(temp_path))
-        pdf_services[service.file_id] = service
+        with open(final_path, "wb") as f:
+            f.write(file_bytes)
 
-        # 重命名文件为 file_id
-        final_path = UPLOAD_DIR / f"{service.file_id}.pdf"
-        os.rename(str(temp_path), str(final_path))
+        # 创建 PDFService
+        service = PDFService(str(final_path))
+        service.file_id = file_id  # 使用预生成的 file_id
+        pdf_services[service.file_id] = service
 
         # 获取第一页尺寸
         page_width, page_height = service.get_page_size(0)
@@ -55,9 +56,12 @@ async def upload_pdf(file: UploadFile = File(...)):
             page_height=page_height
         )
     except Exception as e:
-        # 清理临时文件
-        if temp_path.exists():
-            os.remove(str(temp_path))
+        # 清理文件
+        if final_path.exists():
+            try:
+                os.remove(str(final_path))
+            except OSError:
+                pass
         raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
 
