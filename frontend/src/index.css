@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/* 自定义样式 */
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
