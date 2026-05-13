@@ -73,7 +73,6 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
         left: screenPos.left,
         top: screenPos.top,
         minWidth: screenPos.width,
-        height: screenPos.height,
         fontSize: span.fontSize * scale,
         lineHeight: '1.2',
       }}
@@ -85,7 +84,7 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
         contentEditable={isEditing}
         suppressContentEditableWarning
         className={`
-          block h-full px-1 outline-none whitespace-nowrap
+          block px-1 outline-none whitespace-nowrap
           ${isEditing ? 'text-black select-text cursor-text' : 'text-black/0 select-none'}
         `}
         onBlur={handleBlur}
