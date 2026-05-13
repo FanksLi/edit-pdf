@@ -159,7 +159,7 @@ function PDFViewer() {
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       {/* Toolbar */}
-      <div className="flex items-center gap-4 p-4 bg-white shadow z-20">
+      <div className="flex-shrink-0 flex items-center gap-4 p-4 bg-white shadow z-20">
         <h1 className="text-lg font-semibold text-gray-800">PDF 文字编辑器</h1>
         <div className="flex-1" />
         <button
