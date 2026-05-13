@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import FileUpload from './FileUpload';
 import TextBlock from './TextBlock';
 import { uploadPDF, getPageText, getPageRender, modifyPage, exportPDF } from '../services/api';
@@ -10,6 +10,10 @@ function PDFViewer() {
   const [error, setError] = useState(null);
   const [renderHeight, setRenderHeight] = useState(800);
   const [imageBlobUrl, setImageBlobUrl] = useState(null);
+
+  // 编辑历史栈（用于 Ctrl+Z 撤销）
+  const editHistory = useRef([]);
+  const [canUndo, setCanUndo] = useState(false);
 
   // 上传 PDF
   const handleUpload = async (file) => {
@@ -49,9 +53,17 @@ function PDFViewer() {
     }
   };
 
-  // 编辑回调
+  // 编辑回调（保存历史用于撤销）
   const handleEdit = useCallback(async (edit) => {
     if (!fileId) return;
+
+    // 保存当前状态到历史栈
+    editHistory.current.push({
+      pageData: JSON.parse(JSON.stringify(pageData)),
+      imageBlobUrl: imageBlobUrl,
+    });
+    setCanUndo(editHistory.current.length > 0);
+
     setLoading(true);
     setError(null);
     try {
@@ -68,10 +80,48 @@ function PDFViewer() {
       });
     } catch (err) {
       setError(err.message);
+      // 撤销失败的编辑
+      if (editHistory.current.length > 0) {
+        const prev = editHistory.current.pop();
+        setPageData(prev.pageData);
+        setImageBlobUrl(prev.imageBlobUrl);
+        setCanUndo(editHistory.current.length > 0);
+      }
     } finally {
       setLoading(false);
     }
-  }, [fileId, pageData]);
+  }, [fileId, pageData, imageBlobUrl]);
+
+  // Ctrl+Z 撤销
+  const handleUndo = useCallback(async () => {
+    if (!fileId || editHistory.current.length === 0) return;
+
+    const prev = editHistory.current.pop();
+    setPageData(prev.pageData);
+    setImageBlobUrl(prev.imageBlobUrl);
+    setCanUndo(editHistory.current.length > 0);
+
+    // 重新从后端获取图片（确保同步）
+    try {
+      const imageBlob = await getPageRender(fileId, 0);
+      const blobUrl = URL.createObjectURL(imageBlob);
+      setImageBlobUrl(blobUrl);
+    } catch (err) {
+      // 忽略错误，使用缓存的图片
+    }
+  }, [fileId]);
+
+  // 全局键盘事件监听（Ctrl+Z）
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && canUndo) {
+        e.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canUndo, handleUndo]);
 
   // 导出 PDF
   const handleExport = async () => {
@@ -127,6 +177,18 @@ function PDFViewer() {
       <div className="flex items-center gap-4 p-4 bg-white shadow z-20">
         <h1 className="text-lg font-semibold text-gray-800">PDF 文字编辑器</h1>
         <div className="flex-1" />
+        {/* 撤销按钮 */}
+        <button
+          onClick={handleUndo}
+          disabled={!canUndo || loading}
+          className={`
+            px-3 py-2 rounded font-medium
+            ${!canUndo || loading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}
+          `}
+          title="撤销上一次编辑 (Ctrl+Z)"
+        >
+          ↶ 撤销
+        </button>
         <button
           onClick={handleExport}
           disabled={loading}
@@ -139,7 +201,7 @@ function PDFViewer() {
           {loading ? '处理中...' : '导出 PDF'}
         </button>
         <button
-          onClick={() => { setFileId(null); setPageData(null); setImageBlobUrl(null); }}
+          onClick={() => { setFileId(null); setPageData(null); setImageBlobUrl(null); editHistory.current = []; setCanUndo(false); }}
           className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
         >
           新文件
@@ -175,7 +237,7 @@ function PDFViewer() {
 
       {/* 提示 */}
       <div className="p-2 bg-gray-200 text-center text-sm text-gray-600">
-        双击文字块进行编辑，按 Enter 保存，按 Escape 取消
+        双击文字块编辑 · Enter 保存 · Escape 取消 · Ctrl+Z 撤销
       </div>
     </div>
   );
