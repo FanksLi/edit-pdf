@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { Canvas, IText, FabricImage } from 'fabric';
 import { pdfToCanvas, canvasToPdf } from '../utils/coordinate';
 
-function FabricCanvas({ imageUrl, renderSize, textSpans, images, pageHeight, onEditsReady }) {
+function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const dirtyRef = useRef(new Set());
@@ -26,17 +26,14 @@ function FabricCanvas({ imageUrl, renderSize, textSpans, images, pageHeight, onE
       selection: true,
       preserveObjectStacking: true,
       renderOnAddRemove: false,
+      backgroundColor: '#ffffff',
     });
     fabricRef.current = canvas;
     dirtyRef.current = new Set();
 
-    // 加载背景图
+    // 加载画布内容
     const loadCanvas = async () => {
       try {
-        // 背景图
-        const bgImg = await FabricImage.fromURL(imageUrl);
-        canvas.backgroundImage = bgImg;
-
         // 添加文字对象
         textSpans.forEach((span) => {
           const pos = pdfToCanvas(span.bbox, scale);
@@ -99,7 +96,7 @@ function FabricCanvas({ imageUrl, renderSize, textSpans, images, pageHeight, onE
         fabricRef.current = null;
       }
     };
-  }, [imageUrl, renderSize, textSpans, images]);
+  }, [renderSize, textSpans, images]);
 
   // 事件监听
   useEffect(() => {

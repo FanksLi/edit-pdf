@@ -151,7 +151,6 @@ function PDFViewer() {
 
       <div className="flex justify-center p-8">
         <FabricCanvas
-          imageUrl={imageUrl}
           renderSize={renderSize}
           textSpans={pageData.textSpans}
           images={pageData.images}
