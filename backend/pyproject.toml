@@ -1,0 +1,12 @@
+[project]
+name = "edit-pdf-backend"
+version = "0.1.0"
+description = "PDF 文字编辑系统后端 - 实现文字提取、渲染和修改"
+readme = "../README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.1",
+    "pymupdf>=1.27.2.3",
+    "python-multipart>=0.0.28",
+    "uvicorn>=0.46.0",
+]
