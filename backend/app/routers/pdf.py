@@ -27,6 +27,10 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     # 保存文件
     file_bytes = await file.read()
+
+    # 检查文件是否为空
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty file not allowed")
     temp_path = UPLOAD_DIR / f"temp_{file.filename}"
 
     with open(temp_path, "wb") as f:
@@ -132,6 +136,11 @@ async def export_pdf(file_id: str):
 
     try:
         output_path = service.export_pdf()
+
+        # 清理：导出后释放资源，防止内存泄漏
+        service.close()
+        pdf_services.pop(file_id, None)
+
         return FileResponse(
             path=output_path,
             media_type="application/pdf",
