@@ -95,11 +95,13 @@ async def get_page_render(file_id: str, page_num: int = 0, dpi: int = Query(150,
     service = pdf_services[file_id]
 
     try:
-        image_base64 = service.render_page(page_num, dpi)
+        # 渲染并保存到文件，返回 URL
+        image_path = service.render_page_to_file(page_num, dpi)
+        image_url = f"/renders/{os.path.basename(image_path)}"
         width, height = service.get_render_size(page_num, dpi)
 
         return RenderResponse(
-            image_base64=image_base64,
+            image_url=image_url,
             width=width,
             height=height,
             dpi=dpi
@@ -109,7 +111,7 @@ async def get_page_render(file_id: str, page_num: int = 0, dpi: int = Query(150,
 
 
 @router.post("/{file_id}/page/{page_num}/modify", response_model=ModifyResponse, responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
-async def modify_page(file_id: str, page_num: int, request: ModifyRequest):
+async def modify_page(file_id: str, page_num: int, request: ModifyRequest, dpi: int = Query(150, ge=50, le=300)):
     """修改页面文字"""
     if file_id not in pdf_services:
         raise HTTPException(status_code=404, detail=f"File {file_id} not found")
@@ -118,10 +120,10 @@ async def modify_page(file_id: str, page_num: int, request: ModifyRequest):
 
     try:
         edits = [edit.model_dump() for edit in request.edits]
-        result = service.modify_page(page_num, edits)
+        result = service.modify_page(page_num, edits, dpi)
 
         return ModifyResponse(
-            image_base64=result["image_base64"],
+            image_url=result["image_url"],
             text_data=[TextSpan(**span) for span in result["text_data"]]
         )
     except ValueError as e:

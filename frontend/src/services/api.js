@@ -39,14 +39,14 @@ export async function getPageText(fileId, pageNum) {
  * @param {string} fileId
  * @param {number} pageNum
  * @param {number} dpi
- * @returns {Promise<Blob>}
+ * @returns {Promise<{ image_url: string, width: number, height: number, dpi: number }>}
  */
 export async function getPageRender(fileId, pageNum, dpi = 150) {
   const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/render?dpi=${dpi}`);
   if (!res.ok) {
     throw new Error('Get render failed');
   }
-  return res.blob();
+  return res.json();
 }
 
 /**

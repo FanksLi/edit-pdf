@@ -39,7 +39,7 @@ class TextResponse(BaseModel):
 
 class RenderResponse(BaseModel):
     """渲染响应"""
-    image_base64: str
+    image_url: str
     width: int
     height: int
     dpi: int
@@ -52,7 +52,7 @@ class ModifyRequest(BaseModel):
 
 class ModifyResponse(BaseModel):
     """修改响应"""
-    image_base64: str
+    image_url: str
     text_data: List[TextSpan]
 
 

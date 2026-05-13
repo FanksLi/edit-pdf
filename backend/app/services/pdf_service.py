@@ -95,13 +95,14 @@ class PDFService:
         zoom = dpi / 72
         return (int(width * zoom), int(height * zoom))
 
-    def modify_page(self, page_num: int, edits: List[Dict]) -> Dict:
+    def modify_page(self, page_num: int, edits: List[Dict], dpi: int = 150) -> Dict:
         """修改页面文字
 
         流程：
         1. add_redact_annot(bbox) 标记要抹除的区域
         2. apply_redactions() 真正执行抹除（修改 content stream）
         3. insert_text() 写入新文字
+        4. 保存渲染图片到文件，返回 image_url
         """
         if page_num < 0 or page_num >= len(self.doc):
             raise ValueError(f"Page {page_num} out of range")
@@ -131,12 +132,13 @@ class PDFService:
                 color=(0, 0, 0),
             )
 
-        # Step 4: 重新渲染并提取文字
-        image_base64 = self.render_page(page_num)
+        # Step 4: 保存渲染图片到文件，返回 URL
+        image_path = self.render_page_to_file(page_num, dpi)
+        image_url = f"/renders/{Path(image_path).name}"
         text_data = self.get_page_text(page_num)
 
         return {
-            "image_base64": image_base64,
+            "image_url": image_url,
             "text_data": text_data
         }
 

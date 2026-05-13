@@ -9,7 +9,7 @@ function PDFViewer() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renderHeight, setRenderHeight] = useState(800);
-  const [imageBlobUrl, setImageBlobUrl] = useState(null);
+  const [imageUrl, setImageUrl] = useState(null);
 
   // 编辑历史栈（用于 Ctrl+Z 撤销）
   const editHistory = useRef([]);
@@ -33,17 +33,16 @@ function PDFViewer() {
   // 加载页面数据
   const loadPage = async (fid, pageNum, knownWidth = null, knownHeight = null) => {
     try {
-      const [textData, imageBlob] = await Promise.all([
+      const [textData, imageData] = await Promise.all([
         getPageText(fid, pageNum),
         getPageRender(fid, pageNum),
       ]);
 
-      // 创建图片 URL
-      const blobUrl = URL.createObjectURL(imageBlob);
-      setImageBlobUrl(blobUrl);
+      // 直接使用服务器返回的 URL
+      setImageUrl(imageData.image_url);
 
       setPageData({
-        imagePath: blobUrl,
+        imagePath: imageData.image_url,
         textSpans: textData.spans || [],
         pageWidth: knownWidth || textData.page_width,
         pageHeight: knownHeight || textData.page_height,
@@ -60,7 +59,7 @@ function PDFViewer() {
     // 保存当前状态到历史栈
     editHistory.current.push({
       pageData: JSON.parse(JSON.stringify(pageData)),
-      imageBlobUrl: imageBlobUrl,
+      imageUrl: imageUrl,
     });
     setCanUndo(editHistory.current.length > 0);
 
@@ -68,12 +67,10 @@ function PDFViewer() {
     setError(null);
     try {
       const result = await modifyPage(fileId, 0, [edit]);
-      // 重新加载图片
-      const imageBlob = await getPageRender(fileId, 0);
-      const blobUrl = URL.createObjectURL(imageBlob);
-      setImageBlobUrl(blobUrl);
+      // 使用返回的 image_url
+      setImageUrl(result.image_url);
       setPageData({
-        imagePath: blobUrl,
+        imagePath: result.image_url,
         textSpans: result.text_data || [],
         pageWidth: pageData.pageWidth,
         pageHeight: pageData.pageHeight,
@@ -84,13 +81,13 @@ function PDFViewer() {
       if (editHistory.current.length > 0) {
         const prev = editHistory.current.pop();
         setPageData(prev.pageData);
-        setImageBlobUrl(prev.imageBlobUrl);
+        setImageUrl(prev.imageUrl);
         setCanUndo(editHistory.current.length > 0);
       }
     } finally {
       setLoading(false);
     }
-  }, [fileId, pageData, imageBlobUrl]);
+  }, [fileId, pageData, imageUrl]);
 
   // Ctrl+Z 撤销
   const handleUndo = useCallback(async () => {
@@ -98,17 +95,8 @@ function PDFViewer() {
 
     const prev = editHistory.current.pop();
     setPageData(prev.pageData);
-    setImageBlobUrl(prev.imageBlobUrl);
+    setImageUrl(prev.imageUrl);
     setCanUndo(editHistory.current.length > 0);
-
-    // 重新从后端获取图片（确保同步）
-    try {
-      const imageBlob = await getPageRender(fileId, 0);
-      const blobUrl = URL.createObjectURL(imageBlob);
-      setImageBlobUrl(blobUrl);
-    } catch (err) {
-      // 忽略错误，使用缓存的图片
-    }
   }, [fileId]);
 
   // 全局键盘事件监听（Ctrl+Z）
@@ -201,7 +189,7 @@ function PDFViewer() {
           {loading ? '处理中...' : '导出 PDF'}
         </button>
         <button
-          onClick={() => { setFileId(null); setPageData(null); setImageBlobUrl(null); editHistory.current = []; setCanUndo(false); }}
+          onClick={() => { setFileId(null); setPageData(null); setImageUrl(null); editHistory.current = []; setCanUndo(false); }}
           className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
         >
           新文件
@@ -216,7 +204,7 @@ function PDFViewer() {
         >
           {/* 底层：渲染图片 */}
           <img
-            src={imageBlobUrl}
+            src={imageUrl}
             alt="PDF Page"
             className="absolute top-0 left-0 w-full h-full"
             draggable={false}
