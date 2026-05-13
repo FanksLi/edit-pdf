@@ -11,7 +11,7 @@ function PDFViewer() {
   const [renderSize, setRenderSize] = useState({ width: 0, height: 0 });
   const [imageUrl, setImageUrl] = useState(null);
 
-  // 编辑历史栈（用于 Ctrl+Z 撤销）
+  // 编辑历史栈
   const editHistory = useRef([]);
   const [canUndo, setCanUndo] = useState(false);
 
@@ -152,14 +152,12 @@ function PDFViewer() {
     );
   }
 
-  // 使用后端返回的实际渲染尺寸作为坐标基准
   const { width: renderWidth, height: renderHeight } = renderSize;
-  const scale = renderHeight / pageData.pageHeight;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100">
-      {/* Toolbar */}
-      <div className="flex-shrink-0 flex items-center gap-4 p-4 bg-white shadow z-20">
+    <div className="min-h-screen bg-gray-100">
+      {/* Toolbar - sticky 固定在顶部 */}
+      <div className="sticky top-0 z-20 flex items-center gap-4 p-4 bg-white shadow">
         <h1 className="text-lg font-semibold text-gray-800">PDF 文字编辑器</h1>
         <div className="flex-1" />
         <button
@@ -192,8 +190,8 @@ function PDFViewer() {
         </button>
       </div>
 
-      {/* PDF Canvas */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-8">
+      {/* PDF Canvas - 自然流动，页面滚动 */}
+      <div className="flex justify-center p-8">
         <div
           className="relative shadow-lg bg-white"
           style={{ width: renderWidth, height: renderHeight }}
