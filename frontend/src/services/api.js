@@ -23,7 +23,7 @@ export async function uploadPDF(file) {
  * 获取页面文字数据
  * @param {string} fileId
  * @param {number} pageNum
- * @returns {Promise<{ page_width: number, page_height: number, spans: Array }>}
+ * @returns {Promise<{ page_width: number, page_height: number, spans: Array, images: Array }>}
  */
 export async function getPageText(fileId, pageNum) {
   const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/text`);
@@ -50,17 +50,18 @@ export async function getPageRender(fileId, pageNum, dpi = 150) {
 }
 
 /**
- * 修改页面文字
+ * 修改页面（文字 + 图片）
  * @param {string} fileId
  * @param {number} pageNum
- * @param {Array<{ bbox: number[], newText: string, fontSize: number, origin: number[] }>} edits
- * @returns {Promise<{ image_path: string, text_data: Array }>}
+ * @param {Array} textEdits
+ * @param {Array} imageEdits
+ * @returns {Promise<{ image_url: string, text_data: Array, images: Array }>}
  */
-export async function modifyPage(fileId, pageNum, edits) {
-  const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/modify`, {
+export async function modifyPage(fileId, pageNum, textEdits = [], imageEdits = []) {
+  const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/modify?dpi=150`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ edits }),
+    body: JSON.stringify({ text_edits: textEdits, image_edits: imageEdits }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: 'Modify failed' }));

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import FileUpload from './FileUpload';
-import TextBlock from './TextBlock';
+import FabricCanvas from './FabricCanvas';
 import { uploadPDF, getPageText, getPageRender, modifyPage, exportPDF } from '../services/api';
 
 function PDFViewer() {
@@ -11,11 +11,9 @@ function PDFViewer() {
   const [renderSize, setRenderSize] = useState({ width: 0, height: 0 });
   const [imageUrl, setImageUrl] = useState(null);
 
-  // 编辑历史栈
   const editHistory = useRef([]);
   const [canUndo, setCanUndo] = useState(false);
 
-  // 上传 PDF
   const handleUpload = async (file) => {
     setLoading(true);
     setError(null);
@@ -30,7 +28,6 @@ function PDFViewer() {
     }
   };
 
-  // 加载页面数据
   const loadPage = async (fid, pageNum, knownWidth = null, knownHeight = null) => {
     try {
       const [textData, imageData] = await Promise.all([
@@ -42,8 +39,8 @@ function PDFViewer() {
       setRenderSize({ width: imageData.width, height: imageData.height });
 
       setPageData({
-        imagePath: imageData.image_url,
         textSpans: textData.spans || [],
+        images: textData.images || [],
         pageWidth: knownWidth || textData.page_width,
         pageHeight: knownHeight || textData.page_height,
       });
@@ -52,8 +49,7 @@ function PDFViewer() {
     }
   };
 
-  // 编辑回调
-  const handleEdit = useCallback(async (edit) => {
+  const handleEditsReady = useCallback(async (edits) => {
     if (!fileId) return;
 
     editHistory.current.push({
@@ -65,14 +61,14 @@ function PDFViewer() {
     setLoading(true);
     setError(null);
     try {
-      const result = await modifyPage(fileId, 0, [edit]);
+      const result = await modifyPage(fileId, 0, edits.text_edits, edits.image_edits);
       setImageUrl(result.image_url);
-      setPageData({
-        imagePath: result.image_url,
+      setPageData(prev => ({
         textSpans: result.text_data || [],
-        pageWidth: pageData.pageWidth,
-        pageHeight: pageData.pageHeight,
-      });
+        images: result.images || [],
+        pageWidth: prev.pageWidth,
+        pageHeight: prev.pageHeight,
+      }));
     } catch (err) {
       setError(err.message);
       if (editHistory.current.length > 0) {
@@ -86,17 +82,14 @@ function PDFViewer() {
     }
   }, [fileId, pageData, imageUrl]);
 
-  // Ctrl+Z 撤销
   const handleUndo = useCallback(async () => {
     if (!fileId || editHistory.current.length === 0) return;
-
     const prev = editHistory.current.pop();
     setPageData(prev.pageData);
     setImageUrl(prev.imageUrl);
     setCanUndo(editHistory.current.length > 0);
   }, [fileId]);
 
-  // 全局键盘事件监听
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && canUndo) {
@@ -108,7 +101,6 @@ function PDFViewer() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [canUndo, handleUndo]);
 
-  // 导出 PDF
   const handleExport = async () => {
     if (!fileId) return;
     setLoading(true);
@@ -132,12 +124,7 @@ function PDFViewer() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gray-100">
         <div className="text-red-500 mb-4">{error}</div>
-        <button
-          onClick={() => { setError(null); setFileId(null); setPageData(null); }}
-          className="px-4 py-2 bg-blue-500 text-white rounded"
-        >
-          重新开始
-        </button>
+        <button onClick={() => { setError(null); setFileId(null); setPageData(null); }} className="px-4 py-2 bg-blue-500 text-white rounded">重新开始</button>
       </div>
     );
   }
@@ -152,75 +139,29 @@ function PDFViewer() {
     );
   }
 
-  const { width: renderWidth, height: renderHeight } = renderSize;
-
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* Toolbar - sticky 固定在顶部 */}
       <div className="sticky top-0 z-20 flex items-center gap-4 p-4 bg-white shadow">
         <h1 className="text-lg font-semibold text-gray-800">PDF 文字编辑器</h1>
         <div className="flex-1" />
-        <button
-          onClick={handleUndo}
-          disabled={!canUndo || loading}
-          className={`
-            px-3 py-2 rounded font-medium
-            ${!canUndo || loading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}
-          `}
-          title="撤销上一次编辑 (Ctrl+Z)"
-        >
-          ↶ 撤销
-        </button>
-        <button
-          onClick={handleExport}
-          disabled={loading}
-          className={`
-            px-4 py-2 rounded font-medium
-            ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}
-            text-white
-          `}
-        >
-          {loading ? '处理中...' : '导出 PDF'}
-        </button>
-        <button
-          onClick={() => { setFileId(null); setPageData(null); setImageUrl(null); setRenderSize({ width: 0, height: 0 }); editHistory.current = []; setCanUndo(false); }}
-          className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-        >
-          新文件
-        </button>
+        <button onClick={handleUndo} disabled={!canUndo || loading} className={`px-3 py-2 rounded font-medium ${!canUndo || loading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`} title="撤销 (Ctrl+Z)">↶ 撤销</button>
+        <button onClick={handleExport} disabled={loading} className={`px-4 py-2 rounded font-medium text-white ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}>{loading ? '处理中...' : '导出 PDF'}</button>
+        <button onClick={() => { setFileId(null); setPageData(null); setImageUrl(null); setRenderSize({ width: 0, height: 0 }); editHistory.current = []; setCanUndo(false); }} className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded">新文件</button>
       </div>
 
-      {/* PDF Canvas - 自然流动，页面滚动 */}
       <div className="flex justify-center p-8">
-        <div
-          className="relative shadow-lg bg-white"
-          style={{ width: renderWidth, height: renderHeight }}
-        >
-          {/* 底层：渲染图片 */}
-          <img
-            src={imageUrl}
-            alt="PDF Page"
-            className="absolute top-0 left-0"
-            style={{ width: renderWidth, height: renderHeight }}
-            draggable={false}
-          />
-
-          {/* 上层：文字覆盖 */}
-          {pageData.textSpans.map((span, idx) => (
-            <TextBlock
-              key={`${idx}-${span.text}`}
-              span={span}
-              pageHeight={pageData.pageHeight}
-              renderHeight={renderHeight}
-              onEdit={handleEdit}
-            />
-          ))}
-        </div>
+        <FabricCanvas
+          imageUrl={imageUrl}
+          renderSize={renderSize}
+          textSpans={pageData.textSpans}
+          images={pageData.images}
+          pageHeight={pageData.pageHeight}
+          onEditsReady={handleEditsReady}
+        />
       </div>
 
-      {/* 提示 */}
       <div className="p-2 bg-gray-200 text-center text-sm text-gray-600">
-        双击文字块编辑 · Enter 保存 · Escape 取消 · Ctrl+Z 撤销
+        双击文字编辑 · 拖拽移动 · Enter 保存 · Escape 取消 · Ctrl+Z 撤销
       </div>
     </div>
   );

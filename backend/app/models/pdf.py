@@ -45,15 +45,42 @@ class RenderResponse(BaseModel):
     dpi: int
 
 
+class ImageBlock(BaseModel):
+    """PDF 中的图片块"""
+    xref: int
+    bbox: Tuple[float, float, float, float]
+    width: int
+    height: int
+    image_url: str
+
+
+class PageContentResponse(BaseModel):
+    """页面内容响应 - 文字 + 图片"""
+    page_width: float
+    page_height: float
+    spans: List[TextSpan]
+    images: List[ImageBlock]
+
+
+class ImageEditItem(BaseModel):
+    """图片编辑项"""
+    xref: int
+    old_bbox: Tuple[float, float, float, float]
+    new_bbox: Tuple[float, float, float, float]
+    image_data: str  # base64 编码
+
+
 class ModifyRequest(BaseModel):
     """修改请求"""
-    edits: List[EditItem]
+    text_edits: List[EditItem]
+    image_edits: List[ImageEditItem] = []
 
 
 class ModifyResponse(BaseModel):
     """修改响应"""
     image_url: str
     text_data: List[TextSpan]
+    images: List[ImageBlock]
 
 
 class ErrorResponse(BaseModel):

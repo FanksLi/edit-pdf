@@ -7,7 +7,8 @@ from fastapi.responses import FileResponse
 
 from app.models.pdf import (
     TextSpan, EditItem, UploadResponse, TextResponse,
-    RenderResponse, ModifyRequest, ModifyResponse, ErrorResponse
+    PageContentResponse, RenderResponse, ModifyRequest, ModifyResponse,
+    ErrorResponse, ImageBlock
 )
 from app.services.pdf_service import PDFService
 from app.config import UPLOAD_DIR
@@ -65,9 +66,9 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
 
-@router.get("/{file_id}/page/{page_num}/text", response_model=TextResponse, responses={404: {"model": ErrorResponse}})
+@router.get("/{file_id}/page/{page_num}/text", response_model=PageContentResponse, responses={404: {"model": ErrorResponse}})
 async def get_page_text(file_id: str, page_num: int = 0):
-    """获取页面文字数据"""
+    """获取页面文字和图片数据"""
     if file_id not in pdf_services:
         raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
@@ -76,11 +77,13 @@ async def get_page_text(file_id: str, page_num: int = 0):
     try:
         width, height = service.get_page_size(page_num)
         spans = service.get_page_text(page_num)
+        images = service.get_page_images(page_num)
 
-        return TextResponse(
+        return PageContentResponse(
             page_width=width,
             page_height=height,
-            spans=[TextSpan(**span) for span in spans]
+            spans=[TextSpan(**span) for span in spans],
+            images=[ImageBlock(**img) for img in images],
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -112,19 +115,21 @@ async def get_page_render(file_id: str, page_num: int = 0, dpi: int = Query(150,
 
 @router.post("/{file_id}/page/{page_num}/modify", response_model=ModifyResponse, responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def modify_page(file_id: str, page_num: int, request: ModifyRequest, dpi: int = Query(150, ge=50, le=300)):
-    """修改页面文字"""
+    """修改页面文字和图片"""
     if file_id not in pdf_services:
         raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
     service = pdf_services[file_id]
 
     try:
-        edits = [edit.model_dump() for edit in request.edits]
-        result = service.modify_page(page_num, edits, dpi)
+        text_edits = [edit.model_dump() for edit in request.text_edits]
+        image_edits = [edit.model_dump() for edit in request.image_edits]
+        result = service.modify_page(page_num, text_edits, image_edits, dpi)
 
         return ModifyResponse(
             image_url=result["image_url"],
-            text_data=[TextSpan(**span) for span in result["text_data"]]
+            text_data=[TextSpan(**span) for span in result["text_data"]],
+            images=[ImageBlock(**img) for img in result["images"]],
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

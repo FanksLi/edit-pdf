@@ -95,30 +95,101 @@ class PDFService:
         zoom = dpi / 72
         return (int(width * zoom), int(height * zoom))
 
-    def modify_page(self, page_num: int, edits: List[Dict], dpi: int = 150) -> Dict:
-        """修改页面文字
+    def get_page_images(self, page_num: int) -> List[Dict[str, Any]]:
+        """提取页面中的图片块"""
+        if page_num < 0 or page_num >= len(self.doc):
+            raise ValueError(f"Page {page_num} out of range")
+
+        page = self.doc[page_num]
+        images = []
+
+        # 使用 get_image_info 获取图片信息（包含 xref）
+        image_list = page.get_image_info(xrefs=True)
+        for item in image_list:
+            xref = item.get("xref", 0)
+            if not xref:
+                continue
+
+            try:
+                img_info = self.doc.extract_image(xref)
+                if not img_info or not img_info.get("image"):
+                    continue
+
+                img_bytes = img_info["image"]
+                ext = img_info.get("ext", "png")
+                width = img_info.get("width", 0)
+                height = img_info.get("height", 0)
+                bbox = list(item.get("bbox", [0, 0, 0, 0]))
+
+                # 保存到 RENDER_DIR
+                filename = f"{self.file_id}_img_{xref}.{ext}"
+                filepath = RENDER_DIR / filename
+                with open(filepath, "wb") as f:
+                    f.write(img_bytes)
+
+                images.append({
+                    "xref": xref,
+                    "bbox": bbox,
+                    "width": width,
+                    "height": height,
+                    "image_url": f"/renders/{filename}",
+                })
+            except Exception:
+                continue
+
+        return images
+
+    def modify_page(self, page_num: int, text_edits: List[Dict], image_edits: List[Dict] = None, dpi: int = 150) -> Dict:
+        """修改页面文字和图片
 
         流程：
-        1. add_redact_annot(bbox) 标记要抹除的区域
-        2. apply_redactions() 真正执行抹除（修改 content stream）
-        3. insert_text() 写入新文字
-        4. 保存渲染图片到文件，返回 image_url
+        1. 提取需要移动的图片 bytes（在 redaction 之前）
+        2. 标记所有抹除区域（图片 old_bbox + 文字 bbox）
+        3. apply_redactions() 一次性执行
+        4. 插入移动后的图片
+        5. 插入新文字
+        6. 重新渲染
         """
+        if image_edits is None:
+            image_edits = []
+
         if page_num < 0 or page_num >= len(self.doc):
             raise ValueError(f"Page {page_num} out of range")
 
         page = self.doc[page_num]
 
-        # Step 1: 标记所有抹除区域
-        for edit in edits:
-            bbox = fitz.Rect(edit["bbox"])
-            page.add_redact_annot(bbox, fill=(1, 1, 1))  # 白色填充
+        # Step 1: 提取需要移动的图片 bytes（在 redaction 之前）
+        moved_images = []
+        for img_edit in image_edits:
+            try:
+                xref = img_edit["xref"]
+                img_info = self.doc.extract_image(xref)
+                img_bytes = img_info["image"]
+                moved_images.append({
+                    "bytes": img_bytes,
+                    "new_bbox": img_edit["new_bbox"],
+                })
+                # 标记旧位置 redaction
+                old_bbox = fitz.Rect(img_edit["old_bbox"])
+                page.add_redact_annot(old_bbox, fill=(1, 1, 1))
+            except Exception:
+                continue
 
-        # Step 2: 执行所有抹除（一次性处理）
+        # Step 2: 标记文字 redaction
+        for edit in text_edits:
+            bbox = fitz.Rect(edit["bbox"])
+            page.add_redact_annot(bbox, fill=(1, 1, 1))
+
+        # Step 3: 统一执行所有 redaction
         page.apply_redactions()
 
-        # Step 3: 写入新文字
-        for edit in edits:
+        # Step 4: 插入移动后的图片
+        for moved in moved_images:
+            new_rect = fitz.Rect(moved["new_bbox"])
+            page.insert_image(new_rect, stream=moved["bytes"], keep_proportion=True)
+
+        # Step 5: 插入新文字
+        for edit in text_edits:
             bbox = fitz.Rect(edit["bbox"])
             new_text = edit["newText"]
             font_size = edit.get("fontSize", 12)
@@ -127,19 +198,21 @@ class PDFService:
             page.insert_text(
                 (origin[0], origin[1]),
                 new_text,
-                fontname="helv",  # Helvetica
+                fontname="helv",
                 fontsize=font_size,
                 color=(0, 0, 0),
             )
 
-        # Step 4: 保存渲染图片到文件，返回 URL
+        # Step 6: 重新渲染并提取更新数据
         image_path = self.render_page_to_file(page_num, dpi)
         image_url = f"/renders/{Path(image_path).name}"
         text_data = self.get_page_text(page_num)
+        images = self.get_page_images(page_num)
 
         return {
             "image_url": image_url,
-            "text_data": text_data
+            "text_data": text_data,
+            "images": images,
         }
 
     def export_pdf(self) -> str:
