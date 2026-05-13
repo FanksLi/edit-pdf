@@ -51,7 +51,7 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
         transition-all duration-150
         ${isEditing
           ? 'border-2 border-blue-500 bg-white z-10 shadow-sm'
-          : 'border border-dashed border-transparent hover:border-blue-300 hover:bg-blue-50/30'}
+          : 'border border-red-400/50 bg-transparent'}
       `}
       style={{
         left: screenPos.left,
@@ -62,6 +62,7 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
         lineHeight: '1.2',
       }}
       onDoubleClick={handleDoubleClick}
+      title={`PDF bbox: [${span.bbox.join(', ')}]`}
     >
       {isEditing ? (
         <input
@@ -75,9 +76,7 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
           style={{ fontSize: 'inherit', lineHeight: 'inherit' }}
         />
       ) : (
-        <span className="opacity-0 hover:opacity-50 px-1 block truncate">
-          {text}
-        </span>
+        <span className="opacity-0 block truncate">{text}</span>
       )}
     </div>
   );

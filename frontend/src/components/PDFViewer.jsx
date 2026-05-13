@@ -8,7 +8,7 @@ function PDFViewer() {
   const [pageData, setPageData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [renderHeight, setRenderHeight] = useState(800);
+  const [renderSize, setRenderSize] = useState({ width: 0, height: 0 });
   const [imageUrl, setImageUrl] = useState(null);
 
   // 编辑历史栈（用于 Ctrl+Z 撤销）
@@ -38,8 +38,8 @@ function PDFViewer() {
         getPageRender(fid, pageNum),
       ]);
 
-      // 直接使用服务器返回的 URL
       setImageUrl(imageData.image_url);
+      setRenderSize({ width: imageData.width, height: imageData.height });
 
       setPageData({
         imagePath: imageData.image_url,
@@ -52,11 +52,10 @@ function PDFViewer() {
     }
   };
 
-  // 编辑回调（保存历史用于撤销）
+  // 编辑回调
   const handleEdit = useCallback(async (edit) => {
     if (!fileId) return;
 
-    // 保存当前状态到历史栈
     editHistory.current.push({
       pageData: JSON.parse(JSON.stringify(pageData)),
       imageUrl: imageUrl,
@@ -67,7 +66,6 @@ function PDFViewer() {
     setError(null);
     try {
       const result = await modifyPage(fileId, 0, [edit]);
-      // 使用返回的 image_url
       setImageUrl(result.image_url);
       setPageData({
         imagePath: result.image_url,
@@ -77,7 +75,6 @@ function PDFViewer() {
       });
     } catch (err) {
       setError(err.message);
-      // 撤销失败的编辑
       if (editHistory.current.length > 0) {
         const prev = editHistory.current.pop();
         setPageData(prev.pageData);
@@ -99,7 +96,7 @@ function PDFViewer() {
     setCanUndo(editHistory.current.length > 0);
   }, [fileId]);
 
-  // 全局键盘事件监听（Ctrl+Z）
+  // 全局键盘事件监听
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && canUndo) {
@@ -131,7 +128,6 @@ function PDFViewer() {
     }
   };
 
-  // 错误显示
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gray-100">
@@ -146,7 +142,6 @@ function PDFViewer() {
     );
   }
 
-  // 上传界面
   if (!pageData) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gray-100">
@@ -157,6 +152,8 @@ function PDFViewer() {
     );
   }
 
+  // 使用后端返回的实际渲染尺寸作为坐标基准
+  const { width: renderWidth, height: renderHeight } = renderSize;
   const scale = renderHeight / pageData.pageHeight;
 
   return (
@@ -165,7 +162,6 @@ function PDFViewer() {
       <div className="flex items-center gap-4 p-4 bg-white shadow z-20">
         <h1 className="text-lg font-semibold text-gray-800">PDF 文字编辑器</h1>
         <div className="flex-1" />
-        {/* 撤销按钮 */}
         <button
           onClick={handleUndo}
           disabled={!canUndo || loading}
@@ -189,7 +185,7 @@ function PDFViewer() {
           {loading ? '处理中...' : '导出 PDF'}
         </button>
         <button
-          onClick={() => { setFileId(null); setPageData(null); setImageUrl(null); editHistory.current = []; setCanUndo(false); }}
+          onClick={() => { setFileId(null); setPageData(null); setImageUrl(null); setRenderSize({ width: 0, height: 0 }); editHistory.current = []; setCanUndo(false); }}
           className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
         >
           新文件
@@ -200,13 +196,14 @@ function PDFViewer() {
       <div className="flex-1 overflow-auto flex items-center justify-center p-8">
         <div
           className="relative shadow-lg bg-white"
-          style={{ width: pageData.pageWidth * scale, height: renderHeight }}
+          style={{ width: renderWidth, height: renderHeight }}
         >
           {/* 底层：渲染图片 */}
           <img
             src={imageUrl}
             alt="PDF Page"
-            className="absolute top-0 left-0 w-full h-full"
+            className="absolute top-0 left-0"
+            style={{ width: renderWidth, height: renderHeight }}
             draggable={false}
           />
 
