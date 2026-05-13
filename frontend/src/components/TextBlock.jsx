@@ -56,7 +56,7 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
       style={{
         left: screenPos.left,
         top: screenPos.top,
-        width: screenPos.width,
+        minWidth: screenPos.width,
         height: screenPos.height,
         fontSize: span.fontSize * scale,
         lineHeight: '1.2',
@@ -72,11 +72,11 @@ function TextBlock({ span, pageHeight, renderHeight, onEdit }) {
           onChange={(e) => setText(e.target.value)}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          className="w-full h-full px-1 outline-none text-black bg-transparent"
+          className="w-auto min-w-full h-full px-1 outline-none text-black bg-transparent"
           style={{ fontSize: 'inherit', lineHeight: 'inherit' }}
         />
       ) : (
-        <span className="opacity-0 block truncate">{text}</span>
+        <span className="opacity-0 block whitespace-nowrap">{text}</span>
       )}
     </div>
   );
