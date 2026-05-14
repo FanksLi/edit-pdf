@@ -2,8 +2,6 @@ const API_BASE = '/api/pdf';
 
 /**
  * 上传 PDF 文件
- * @param {File} file
- * @returns {Promise<{ file_id: string, page_count: number, page_width: number, page_height: number }>}
  */
 export async function uploadPDF(file) {
   const formData = new FormData();
@@ -20,10 +18,7 @@ export async function uploadPDF(file) {
 }
 
 /**
- * 获取页面文字数据
- * @param {string} fileId
- * @param {number} pageNum
- * @returns {Promise<{ page_width: number, page_height: number, spans: Array, images: Array }>}
+ * 获取页面段落和图片数据
  */
 export async function getPageText(fileId, pageNum) {
   const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/text`);
@@ -36,10 +31,6 @@ export async function getPageText(fileId, pageNum) {
 
 /**
  * 获取页面渲染图片
- * @param {string} fileId
- * @param {number} pageNum
- * @param {number} dpi
- * @returns {Promise<{ image_url: string, width: number, height: number, dpi: number }>}
  */
 export async function getPageRender(fileId, pageNum, dpi = 150) {
   const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/render?dpi=${dpi}`);
@@ -50,18 +41,13 @@ export async function getPageRender(fileId, pageNum, dpi = 150) {
 }
 
 /**
- * 修改页面（文字 + 图片）
- * @param {string} fileId
- * @param {number} pageNum
- * @param {Array} textEdits
- * @param {Array} imageEdits
- * @returns {Promise<{ image_url: string, text_data: Array, images: Array }>}
+ * 修改页面（段落 + 图片）
  */
-export async function modifyPage(fileId, pageNum, textEdits = [], imageEdits = []) {
+export async function modifyPage(fileId, pageNum, paragraphEdits = [], imageEdits = []) {
   const res = await fetch(`${API_BASE}/${fileId}/page/${pageNum}/modify?dpi=150`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text_edits: textEdits, image_edits: imageEdits }),
+    body: JSON.stringify({ paragraph_edits: paragraphEdits, image_edits: imageEdits }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: 'Modify failed' }));
@@ -72,8 +58,6 @@ export async function modifyPage(fileId, pageNum, textEdits = [], imageEdits = [
 
 /**
  * 导出修改后的 PDF
- * @param {string} fileId
- * @returns {Promise<Blob>}
  */
 export async function exportPDF(fileId) {
   const res = await fetch(`${API_BASE}/${fileId}/export`);

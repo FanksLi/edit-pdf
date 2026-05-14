@@ -1,8 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { Canvas, IText, FabricImage } from 'fabric';
+import { Canvas, Textbox, FabricImage } from 'fabric';
 import { pdfToCanvas, canvasToPdf } from '../utils/coordinate';
 
-function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady }) {
+function FabricCanvas({ renderSize, paragraphs, images, pageHeight, onEditsReady }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const dirtyRef = useRef(new Set());
@@ -34,28 +34,41 @@ function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady 
     // 加载画布内容
     const loadCanvas = async () => {
       try {
-        // 添加文字对象
-        textSpans.forEach((span) => {
-          const pos = pdfToCanvas(span.bbox, scale);
-          const r = Math.round(span.color[0] * 255);
-          const g = Math.round(span.color[1] * 255);
-          const b = Math.round(span.color[2] * 255);
+        // 添加段落文字对象
+        paragraphs.forEach((para) => {
+          const pos = pdfToCanvas(para.bbox, scale);
+          const r = Math.round(para.color[0] * 255);
+          const g = Math.round(para.color[1] * 255);
+          const b = Math.round(para.color[2] * 255);
 
-          const textObj = new IText(span.text, {
+          // 反算 lineHeight 比值，使 Textbox 总高度 = PDF bbox 高度
+          // Fabric.js height ≈ numLines * fontSize * ratio，要让它 = pos.height
+          const numLines = para.text.split('\n').length;
+          const lineHeightRatio = numLines > 1
+            ? pos.height / (numLines * para.fontSize * scale)
+            : 1.2;
+
+          const textObj = new Textbox(para.text, {
             left: pos.left,
             top: pos.top,
-            fontSize: span.fontSize * scale,
+            width: pos.width * 1.2,
+            fontSize: para.fontSize * scale,
+            lineHeight: lineHeightRatio,
             fill: `rgb(${r},${g},${b})`,
             fontFamily: 'Helvetica, Arial, sans-serif',
             editable: true,
             originX: 'left',
             originY: 'top',
+            splitByGrapheme: true,
           });
           textObj._pdfData = {
-            originalBbox: [...span.bbox],
-            originalOrigin: [...span.origin],
-            originalFontSize: span.fontSize,
-            originalText: span.text,
+            originalBbox: [...para.bbox],
+            originalFontSize: para.fontSize,
+            originalFontName: para.fontName,
+            originalText: para.text,
+            originalColor: [...para.color],
+            originalHeight: para.bbox[3] - para.bbox[1],
+            lineHeight: para.lineHeight,
           };
           canvas.add(textObj);
         });
@@ -68,9 +81,12 @@ function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady 
             imgObj.set({
               left: pos.left,
               top: pos.top,
+              originX: 'left',
+              originY: 'top',
+              strokeWidth: 0,
             });
-            imgObj.scaleToWidth(pos.width);
-            imgObj.scaleToHeight(pos.height);
+            imgObj.scaleX = pos.width / imgObj.width;
+            imgObj.scaleY = pos.height / imgObj.height;
             imgObj._pdfData = {
               xref: img.xref,
               originalBbox: [...img.bbox],
@@ -96,7 +112,7 @@ function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady 
         fabricRef.current = null;
       }
     };
-  }, [renderSize, textSpans, images]);
+  }, [renderSize, paragraphs, images]);
 
   // 事件监听
   useEffect(() => {
@@ -128,26 +144,25 @@ function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady 
     const canvas = fabricRef.current;
     if (!canvas || !onEditsReady) return;
 
-    const textEdits = [];
+    const paragraphEdits = [];
     const imageEdits = [];
 
     for (const obj of dirtyRef.current) {
       if (!obj._pdfData) continue;
 
       if (obj._pdfData.originalText !== undefined) {
-        // 文字编辑
-        const newBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
-        const newOrigin = [newBbox[0], obj._pdfData.originalOrigin[1]];
-        // 如果文字被移动了，origin 也需要更新
-        if (obj.left !== pdfToCanvas(obj._pdfData.originalBbox, scale).left) {
-          newOrigin[1] = newBbox[3] - obj._pdfData.originalFontSize * 0.2;
-        }
+        // 段落文字编辑
+        const pdf = obj._pdfData;
+        const currentHeightPdf = obj.getScaledHeight() / scale;
+        const heightDelta = Math.max(0, currentHeightPdf - pdf.originalHeight);
 
-        textEdits.push({
-          bbox: obj._pdfData.originalBbox,
+        paragraphEdits.push({
+          bbox: pdf.originalBbox,
           newText: obj.text,
-          fontSize: obj._pdfData.originalFontSize,
-          origin: newOrigin,
+          fontSize: pdf.originalFontSize,
+          fontName: pdf.originalFontName,
+          color: pdf.originalColor,
+          height_delta: heightDelta,
         });
       } else if (obj._pdfData.xref !== undefined) {
         // 图片编辑
@@ -156,13 +171,13 @@ function FabricCanvas({ renderSize, textSpans, images, pageHeight, onEditsReady 
           xref: obj._pdfData.xref,
           old_bbox: obj._pdfData.originalBbox,
           new_bbox: newBbox,
-          image_data: '', // 后端已通过 xref 提取
+          image_data: '',
         });
       }
     }
 
-    if (textEdits.length > 0 || imageEdits.length > 0) {
-      onEditsReady({ text_edits: textEdits, image_edits: imageEdits });
+    if (paragraphEdits.length > 0 || imageEdits.length > 0) {
+      onEditsReady({ paragraph_edits: paragraphEdits, image_edits: imageEdits });
     }
     dirtyRef.current = new Set();
   }, [onEditsReady, scale]);

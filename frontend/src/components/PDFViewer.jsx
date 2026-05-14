@@ -39,7 +39,7 @@ function PDFViewer() {
       setRenderSize({ width: imageData.width, height: imageData.height });
 
       setPageData({
-        textSpans: textData.spans || [],
+        paragraphs: textData.paragraphs || [],
         images: textData.images || [],
         pageWidth: knownWidth || textData.page_width,
         pageHeight: knownHeight || textData.page_height,
@@ -54,17 +54,17 @@ function PDFViewer() {
 
     editHistory.current.push({
       pageData: JSON.parse(JSON.stringify(pageData)),
-      imageUrl: imageUrl,
+      imageUrl,
     });
     setCanUndo(editHistory.current.length > 0);
 
     setLoading(true);
     setError(null);
     try {
-      const result = await modifyPage(fileId, 0, edits.text_edits, edits.image_edits);
+      const result = await modifyPage(fileId, 0, edits.paragraph_edits, edits.image_edits);
       setImageUrl(result.image_url);
       setPageData(prev => ({
-        textSpans: result.text_data || [],
+        paragraphs: result.paragraphs || [],
         images: result.images || [],
         pageWidth: prev.pageWidth,
         pageHeight: prev.pageHeight,
@@ -152,7 +152,7 @@ function PDFViewer() {
       <div className="flex justify-center p-8">
         <FabricCanvas
           renderSize={renderSize}
-          textSpans={pageData.textSpans}
+          paragraphs={pageData.paragraphs}
           images={pageData.images}
           pageHeight={pageData.pageHeight}
           onEditsReady={handleEditsReady}

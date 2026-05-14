@@ -1,7 +1,7 @@
 """PDF 数据模型定义"""
 
 from pydantic import BaseModel
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 class TextSpan(BaseModel):
@@ -14,12 +14,32 @@ class TextSpan(BaseModel):
     origin: Tuple[float, float]  # 文字基线起点 [x, y]
 
 
+class Paragraph(BaseModel):
+    """段落数据 — 多行文字组成的编辑单元"""
+    text: str
+    bbox: Tuple[float, float, float, float]
+    fontSize: float
+    fontName: str
+    color: Tuple[float, float, float]
+    lineHeight: float
+
+
 class EditItem(BaseModel):
     """编辑项"""
     bbox: Tuple[float, float, float, float]
     newText: str
     fontSize: float
     origin: Tuple[float, float]
+
+
+class ParagraphEditItem(BaseModel):
+    """段落编辑项"""
+    bbox: Tuple[float, float, float, float]  # 原始段落 bbox
+    newText: str
+    fontSize: float
+    fontName: str
+    color: Tuple[float, float, float]
+    height_delta: float = 0.0  # 新高度 - 原高度（PDF 坐标）
 
 
 class UploadResponse(BaseModel):
@@ -55,10 +75,10 @@ class ImageBlock(BaseModel):
 
 
 class PageContentResponse(BaseModel):
-    """页面内容响应 - 文字 + 图片"""
+    """页面内容响应 - 段落 + 图片"""
     page_width: float
     page_height: float
-    spans: List[TextSpan]
+    paragraphs: List[Paragraph]
     images: List[ImageBlock]
 
 
@@ -72,14 +92,14 @@ class ImageEditItem(BaseModel):
 
 class ModifyRequest(BaseModel):
     """修改请求"""
-    text_edits: List[EditItem]
+    paragraph_edits: List[ParagraphEditItem] = []
     image_edits: List[ImageEditItem] = []
 
 
 class ModifyResponse(BaseModel):
     """修改响应"""
     image_url: str
-    text_data: List[TextSpan]
+    paragraphs: List[Paragraph]
     images: List[ImageBlock]
 
 
