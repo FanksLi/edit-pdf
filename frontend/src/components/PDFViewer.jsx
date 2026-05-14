@@ -41,6 +41,7 @@ function PDFViewer() {
       setPageData({
         paragraphs: textData.paragraphs || [],
         images: textData.images || [],
+        drawings: textData.drawings || [],
         pageWidth: knownWidth || textData.page_width,
         pageHeight: knownHeight || textData.page_height,
       });
@@ -66,6 +67,7 @@ function PDFViewer() {
       setPageData(prev => ({
         paragraphs: result.paragraphs || [],
         images: result.images || [],
+        drawings: result.drawings || prev.drawings || [],
         pageWidth: prev.pageWidth,
         pageHeight: prev.pageHeight,
       }));
@@ -154,6 +156,7 @@ function PDFViewer() {
           renderSize={renderSize}
           paragraphs={pageData.paragraphs}
           images={pageData.images}
+          drawings={pageData.drawings}
           pageHeight={pageData.pageHeight}
           onEditsReady={handleEditsReady}
         />

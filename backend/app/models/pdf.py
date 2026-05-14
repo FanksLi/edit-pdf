@@ -22,6 +22,7 @@ class Paragraph(BaseModel):
     fontName: str
     color: Tuple[float, float, float]
     lineHeight: float
+    z_index: int = 0
 
 
 class EditItem(BaseModel):
@@ -40,6 +41,7 @@ class ParagraphEditItem(BaseModel):
     fontName: str
     color: Tuple[float, float, float]
     height_delta: float = 0.0  # 新高度 - 原高度（PDF 坐标）
+    lineHeight: float = 0.0  # 行间距（PDF 坐标）
 
 
 class UploadResponse(BaseModel):
@@ -72,12 +74,22 @@ class ImageBlock(BaseModel):
     width: int
     height: int
     image_url: str
+    z_index: int = 0
+
+
+class DrawingBlock(BaseModel):
+    """PDF 中的绘图元素（矩形、线条等）"""
+    rect: Tuple[float, float, float, float]  # [x0, y0, x1, y1]
+    fill: Optional[Tuple[float, float, float]] = None  # RGB (0-1)
+    stroke: Optional[Tuple[float, float, float]] = None  # RGB (0-1)
+    z_index: int = 0
 
 
 class PageContentResponse(BaseModel):
-    """页面内容响应 - 段落 + 图片"""
+    """页面内容响应 - 绘图 + 段落 + 图片（按 z_index 排列）"""
     page_width: float
     page_height: float
+    drawings: List[DrawingBlock] = []
     paragraphs: List[Paragraph]
     images: List[ImageBlock]
 
@@ -101,6 +113,7 @@ class ModifyResponse(BaseModel):
     image_url: str
     paragraphs: List[Paragraph]
     images: List[ImageBlock]
+    drawings: List[DrawingBlock] = []
 
 
 class ErrorResponse(BaseModel):
