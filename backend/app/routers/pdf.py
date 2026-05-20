@@ -25,7 +25,6 @@ pdf_services: Dict[str, PDFService] = {}
 async def get_fonts():
     """获取可用字体列表及变体信息"""
     return scan_local_fonts(LOCAL_FONT_DIR)
-pdf_services: Dict[str, PDFService] = {}
 
 
 @router.post("/upload", response_model=UploadResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
