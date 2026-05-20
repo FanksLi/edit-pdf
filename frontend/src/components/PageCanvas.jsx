@@ -3,7 +3,15 @@ import { Canvas, Textbox, FabricImage, Rect } from 'fabric';
 import { pdfToCanvas, canvasToPdf } from '../utils/coordinate';
 import { getPageText, getPageRender } from '../services/api';
 
-const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, pageHeight }, ref) {
+function hexToRgb(hex) {
+  if (!hex || !hex.startsWith('#')) return [0, 0, 0];
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return [r, g, b];
+}
+
+const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, pageHeight, onSelectionChange }, ref) {
   const canvasElRef = useRef(null);
   const containerRef = useRef(null);
   const fabricRef = useRef(null);
@@ -89,7 +97,41 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
         }
       }
 
-      return { paragraph_edits: paragraphEdits, image_edits: imageEdits, drawing_edits: drawingEdits };
+      // 收集新增元素
+      const newElements = [];
+      for (const obj of canvas.getObjects()) {
+        if (!obj._newElement) continue;
+
+        const pdfBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
+
+        if (obj._elementType === 'text') {
+          newElements.push({
+            type: 'text',
+            bbox: pdfBbox,
+            text: obj.text,
+            font_name: obj._elementProps?.fontFamily || 'Roboto',
+            font_size: (obj._elementProps?.fontSize || obj.fontSize) / scale,
+            color: hexToRgb(obj.fill),
+            font_weight: obj.fontWeight === 'bold' ? 'bold' : 'normal',
+            font_style: obj.fontStyle === 'italic' ? 'italic' : 'normal',
+          });
+        } else if (obj._elementType === 'image') {
+          newElements.push({
+            type: 'image',
+            bbox: pdfBbox,
+            image_id: obj._elementProps?.imageId,
+            ext: obj._elementProps?.ext,
+            opacity: obj.opacity ?? 1,
+          });
+        }
+      }
+
+      return {
+        paragraph_edits: paragraphEdits,
+        image_edits: imageEdits,
+        drawing_edits: drawingEdits,
+        new_elements: newElements,
+      };
     },
 
     undo() {
@@ -120,6 +162,70 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
 
     canRedo() {
       return redoStackRef.current.length > 0;
+    },
+
+    addNewText() {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+
+      const textObj = new Textbox('输入文字', {
+        left: canvas.width / 2 - 100,
+        top: canvas.height / 2 - 20,
+        width: 200,
+        fontSize: 16 * scale,
+        fontFamily: 'Roboto, Arial, sans-serif',
+        fill: '#000000',
+        editable: true,
+        originX: 'left',
+        originY: 'top',
+        splitByGrapheme: true,
+      });
+      textObj._newElement = true;
+      textObj._elementType = 'text';
+      textObj._elementProps = {
+        fontFamily: 'Roboto',
+        fontSize: 16 * scale,
+      };
+      canvas.add(textObj);
+      canvas.setActiveObject(textObj);
+      textObj.enterEditing();
+      canvas.requestRenderAll();
+      saveSnapshot();
+    },
+
+    async addNewImage(imageUrl, imageId, ext) {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+
+      try {
+        const imgObj = await FabricImage.fromURL(imageUrl);
+        const maxDim = 200;
+        const ratio = Math.min(maxDim / imgObj.width, maxDim / imgObj.height, 1);
+        imgObj.set({
+          left: canvas.width / 2 - (imgObj.width * ratio) / 2,
+          top: canvas.height / 2 - (imgObj.height * ratio) / 2,
+          scaleX: ratio,
+          scaleY: ratio,
+          originX: 'left',
+          originY: 'top',
+          strokeWidth: 0,
+        });
+        imgObj._newElement = true;
+        imgObj._elementType = 'image';
+        imgObj._elementProps = {
+          imageId: imageId,
+          ext: ext,
+          opacity: 1,
+          originalWidth: imgObj.width,
+          originalHeight: imgObj.height,
+        };
+        canvas.add(imgObj);
+        canvas.setActiveObject(imgObj);
+        canvas.requestRenderAll();
+        saveSnapshot();
+      } catch (e) {
+        console.error('Failed to add image:', e);
+      }
     },
   }));
 
@@ -225,6 +331,17 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
       }
     });
 
+    // 选中事件上报
+    canvas.on('selection:created', (e) => {
+      if (onSelectionChange) onSelectionChange(e.selected?.[0] || null, canvas);
+    });
+    canvas.on('selection:updated', (e) => {
+      if (onSelectionChange) onSelectionChange(e.selected?.[0] || null, canvas);
+    });
+    canvas.on('selection:cleared', () => {
+      if (onSelectionChange) onSelectionChange(null, canvas);
+    });
+
     const loadElements = async () => {
       const elements = [];
 
@@ -312,6 +429,9 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
     loadElements();
 
     return () => {
+      canvas.off('selection:created');
+      canvas.off('selection:updated');
+      canvas.off('selection:cleared');
       if (fabricRef.current) {
         fabricRef.current.dispose();
         fabricRef.current = null;
