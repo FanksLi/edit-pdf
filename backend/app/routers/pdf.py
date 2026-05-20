@@ -1,6 +1,7 @@
 """PDF API 路由"""
 
 import os
+import uuid
 from typing import Dict
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -27,6 +28,25 @@ async def get_fonts():
     return scan_local_fonts(LOCAL_FONT_DIR)
 
 
+@router.post("/{file_id}/upload_image")
+async def upload_image(file_id: str, file: UploadFile = File(...)):
+    """上传图片文件，返回 image_id 供后续引用"""
+    if file_id not in pdf_services:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+
+    image_id = uuid.uuid4().hex
+    ext = Path(file.filename).suffix if file.filename else ".png"
+    if ext.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+        ext = ".png"
+
+    image_path = IMAGE_DIR / f"{file_id}_{image_id}{ext}"
+    content = await file.read()
+    with open(image_path, "wb") as f:
+        f.write(content)
+
+    return {"image_id": image_id, "ext": ext}
+
+
 @router.post("/upload", response_model=UploadResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def upload_pdf(file: UploadFile = File(...)):
     """上传 PDF 文件"""
@@ -38,7 +58,6 @@ async def upload_pdf(file: UploadFile = File(...)):
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty file not allowed")
 
-    import uuid
     file_id = uuid.uuid4().hex
     final_path = UPLOAD_DIR / f"{file_id}.pdf"
 
