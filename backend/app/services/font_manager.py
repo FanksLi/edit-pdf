@@ -61,6 +61,113 @@ def find_system_font(font_name: str) -> Optional[str]:
     return str(path) if path.exists() else None
 
 
+def scan_local_fonts(font_dir) -> list:
+    """扫描 localFont 目录，返回字体族列表及变体信息。"""
+    from pathlib import Path as _Path
+    font_dir = _Path(font_dir)
+    if not font_dir.exists():
+        return []
+
+    DISPLAY_NAMES = {
+        "SimHei": "SimHei (黑体)",
+        "Arimo": "Arimo",
+        "Caladea": "Caladea",
+        "Carlito": "Carlito",
+        "Cousine": "Cousine",
+        "Liberation_Serif": "Liberation Serif",
+        "Open_Sans": "Open Sans",
+        "Roboto": "Roboto",
+        "Roboto_Mono": "Roboto Mono",
+        "Tinos": "Tinos",
+    }
+
+    VARIANT_PATTERNS = [
+        ("bolditalic", "bolditalic"),
+        ("bold", "bold"),
+        ("italic", "italic"),
+    ]
+
+    results = []
+    for family_dir in sorted(font_dir.iterdir()):
+        if not family_dir.is_dir():
+            continue
+        family = family_dir.name
+        ttf_files = list(family_dir.glob("*.ttf"))
+        if not ttf_files:
+            continue
+
+        variants = ["regular"]
+        for ttf in ttf_files:
+            name_lower = ttf.stem.lower()
+            for pattern, variant_name in VARIANT_PATTERNS:
+                if pattern in name_lower:
+                    if variant_name not in variants:
+                        variants.append(variant_name)
+                    break
+
+        results.append({
+            "family": family,
+            "display_name": DISPLAY_NAMES.get(family, family),
+            "variants": sorted(variants),
+        })
+
+    return results
+
+
+def find_local_font(font_dir, family: str, weight: str = "normal", style: str = "normal") -> Optional[str]:
+    """在 localFont 目录中查找指定字体族的变体文件。"""
+    from pathlib import Path as _Path
+    font_dir = _Path(font_dir)
+    family_dir = font_dir / family
+    if not family_dir.exists():
+        return None
+
+    need_bold = weight == "bold"
+    need_italic = style == "italic"
+
+    # Build a mapping from variant type to file, preferring exact matches
+    variant_files = {}
+    for ttf in family_dir.glob("*.ttf"):
+        name_lower = ttf.stem.lower()
+        # Determine what variant this file represents
+        has_bold = "bold" in name_lower
+        has_italic = "italic" in name_lower
+
+        if has_bold and has_italic:
+            key = "bolditalic"
+        elif has_bold:
+            key = "bold"
+        elif has_italic:
+            key = "italic"
+        elif "regular" in name_lower:
+            key = "regular"
+        else:
+            key = "regular"
+
+        existing = variant_files.get(key)
+        if existing is None:
+            variant_files[key] = ttf
+        elif key == "regular":
+            # For regular: always prefer files with "regular" in name
+            if "regular" in name_lower and "regular" not in existing.stem.lower():
+                variant_files[key] = ttf
+            # Don't let fallback overwrite a named regular
+        elif len(ttf.stem) < len(existing.stem):
+            # For other variants: prefer shorter stem (exact match)
+            variant_files[key] = ttf
+
+    if need_bold and need_italic:
+        result = variant_files.get("bolditalic") or variant_files.get("bold") or variant_files.get("regular")
+    elif need_bold:
+        result = variant_files.get("bold") or variant_files.get("regular")
+    elif need_italic:
+        result = variant_files.get("italic") or variant_files.get("regular")
+    else:
+        result = variant_files.get("regular")
+
+    return str(result) if result else None
+
+
 def _extract_ttc_font(ttc_path: str) -> Optional[str]:
     """从 TTC 文件提取单个字体为临时 TTF 文件。
 

@@ -127,3 +127,31 @@ class ErrorResponse(BaseModel):
     """错误响应"""
     error: str
     detail: str
+
+
+class FontVariant(BaseModel):
+    """字体变体信息"""
+    family: str
+    display_name: str
+    variants: List[str]  # ["regular", "bold", "italic", "bolditalic"]
+
+
+class NewElement(BaseModel):
+    """新增元素（文本或图片）"""
+    type: str  # "text" or "image"
+
+    # 通用
+    bbox: Tuple[float, float, float, float]  # [x0, y0, x1, y1]
+
+    # 文本字段
+    text: Optional[str] = None
+    font_name: Optional[str] = None
+    font_size: Optional[float] = None
+    color: Optional[Tuple[float, float, float]] = None  # [r, g, b] 0-1
+    font_weight: Optional[str] = None   # "normal" / "bold"
+    font_style: Optional[str] = None    # "normal" / "italic"
+    text_align: Optional[str] = None    # "left" / "center" / "right"
+
+    # 图片字段
+    image_id: Optional[str] = None
+    opacity: Optional[float] = None  # 0-1

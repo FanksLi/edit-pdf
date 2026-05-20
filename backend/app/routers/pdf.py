@@ -5,17 +5,26 @@ from typing import Dict
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from pathlib import Path
 from app.models.pdf import (
     UploadResponse, PageContentResponse, RenderResponse,
     ModifyRequest, ModifyResponse, ErrorResponse,
-    ImageBlock, DrawingBlock, Paragraph,
+    ImageBlock, DrawingBlock, Paragraph, FontVariant,
 )
 from app.services.pdf_service import PDFService
-from app.config import UPLOAD_DIR
+from app.services.font_manager import scan_local_fonts
+from app.config import UPLOAD_DIR, LOCAL_FONT_DIR, IMAGE_DIR
 
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
 # 内存中管理 PDFService 实例
+pdf_services: Dict[str, PDFService] = {}
+
+
+@router.get("/fonts", response_model=list[FontVariant])
+async def get_fonts():
+    """获取可用字体列表及变体信息"""
+    return scan_local_fonts(LOCAL_FONT_DIR)
 pdf_services: Dict[str, PDFService] = {}
 
 
