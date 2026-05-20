@@ -75,12 +75,14 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
         } else if (pdf.xref !== undefined) {
           const newBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
           const posChanged = newBbox.some((v, i) => Math.abs(v - pdf.originalBbox[i]) > 0.5);
-          if (posChanged) {
+          const angleChanged = (obj.angle || 0) !== 0;
+          if (posChanged || angleChanged) {
             imageEdits.push({
               xref: pdf.xref,
               old_bbox: pdf.originalBbox,
               new_bbox: newBbox,
               image_data: '',
+              angle: obj.angle || 0,
             });
           }
         } else if (pdf.originalRect !== undefined) {
@@ -102,9 +104,8 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
       for (const obj of canvas.getObjects()) {
         if (!obj._newElement) continue;
 
-        const pdfBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
-
         if (obj._elementType === 'text') {
+          const pdfBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
           newElements.push({
             type: 'text',
             bbox: pdfBbox,
@@ -114,14 +115,44 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
             color: hexToRgb(obj.fill),
             font_weight: obj.fontWeight === 'bold' ? 'bold' : 'normal',
             font_style: obj.fontStyle === 'italic' ? 'italic' : 'normal',
+            text_align: obj.textAlign || 'left',
           });
         } else if (obj._elementType === 'image') {
+          const angle = obj.angle || 0;
+          let pdfBbox;
+          if (angle !== 0) {
+            // 旋转时：从 Fabric.js 计算视觉包围框（旋转后的 AABB）
+            const center = obj.getCenterPoint();
+            const halfW = obj.getScaledWidth() / 2;
+            const halfH = obj.getScaledHeight() / 2;
+            const rad = angle * Math.PI / 180;
+            const cosA = Math.cos(rad);
+            const sinA = Math.sin(rad);
+            const corners = [
+              [-halfW, -halfH], [halfW, -halfH],
+              [halfW, halfH], [-halfW, halfH],
+            ];
+            const rotated = corners.map(([dx, dy]) => ({
+              x: center.x + dx * cosA - dy * sinA,
+              y: center.y + dx * sinA + dy * cosA,
+            }));
+            const xs = rotated.map(c => c.x);
+            const ys = rotated.map(c => c.y);
+            const inv = 1 / scale;
+            pdfBbox = [
+              Math.min(...xs) * inv, Math.min(...ys) * inv,
+              Math.max(...xs) * inv, Math.max(...ys) * inv,
+            ];
+          } else {
+            pdfBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
+          }
           newElements.push({
             type: 'image',
             bbox: pdfBbox,
             image_id: obj._elementProps?.imageId,
             ext: obj._elementProps?.ext,
             opacity: obj.opacity ?? 1,
+            angle: angle,
           });
         }
       }
@@ -323,12 +354,28 @@ const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, 
 
     let snapshotId = 0;
 
-    canvas.on('object:modified', () => saveSnapshot());
+    canvas.on('object:modified', () => {
+      saveSnapshot();
+      // 同步属性面板（角度、位置、缩放等可能变了）
+      const active = canvas.getActiveObject();
+      if (active && onSelectionChange) onSelectionChange(active, canvas);
+    });
     canvas.on('text:editing:exited', (e) => {
       const obj = e.target;
       if (obj._pdfData && obj.text !== obj._pdfData.originalText) {
         saveSnapshot();
       }
+    });
+
+    // 拖拽过程中实时同步属性面板
+    canvas.on('object:scaling', (e) => {
+      if (onSelectionChange) onSelectionChange(e.target, canvas);
+    });
+    canvas.on('object:rotating', (e) => {
+      if (onSelectionChange) onSelectionChange(e.target, canvas);
+    });
+    canvas.on('object:moving', (e) => {
+      if (onSelectionChange) onSelectionChange(e.target, canvas);
     });
 
     // 选中事件上报

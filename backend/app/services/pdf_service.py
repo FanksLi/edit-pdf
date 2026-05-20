@@ -3,12 +3,13 @@
 import fitz
 import uuid
 import base64
+import io
 import re
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from app.config import RENDER_DIR, OUTPUT_DIR, IMAGE_DIR
+from app.config import RENDER_DIR, OUTPUT_DIR, IMAGE_DIR, LOCAL_FONT_DIR
 from app.services.font_manager import FontManager
 
 
@@ -19,7 +20,7 @@ class PDFService:
     def __init__(self, file_path: str):
         self.doc = fitz.open(file_path)
         self.file_id = uuid.uuid4().hex
-        self.font_mgr = FontManager()
+        self.font_mgr = FontManager(local_font_dir=LOCAL_FONT_DIR)
         self.page_sizes: List[tuple] = []
         for page in self.doc:
             self.page_sizes.append((page.rect.width, page.rect.height))
@@ -804,6 +805,7 @@ class PDFService:
                 moved_images.append({
                     "bytes": img_bytes,
                     "new_bbox": img_edit["new_bbox"],
+                    "angle": img_edit.get("angle", 0),
                 })
             except Exception:
                 continue
@@ -911,7 +913,11 @@ class PDFService:
 
         # 14. 插入移动图片
         for moved in moved_images:
-            page.insert_image(fitz.Rect(moved["new_bbox"]), stream=moved["bytes"],
+            img_bytes = moved["bytes"]
+            angle = moved.get("angle", 0)
+            if angle and angle % 360 != 0:
+                img_bytes = _rotate_image_bytes(img_bytes, angle, ".png")
+            page.insert_image(fitz.Rect(moved["new_bbox"]), stream=img_bytes,
                               keep_proportion=True)
 
         # 15. 插入位移图片
@@ -938,9 +944,6 @@ class PDFService:
 
         在已有元素编辑之后调用，纯新增，不涉及涂改。
         """
-        from app.services.font_manager import find_local_font
-        from app.config import LOCAL_FONT_DIR
-
         for el in new_elements:
             el_type = el.get("type", "")
             bbox = el.get("bbox", [0, 0, 0, 0])
@@ -956,44 +959,23 @@ class PDFService:
                 color = el.get("color", [0, 0, 0])
                 font_weight = el.get("font_weight", "normal")
                 font_style = el.get("font_style", "normal")
+                text_align = el.get("text_align", "left")
+                align_map = {"left": 0, "center": 1, "right": 2, "justify": 3}
+                align = align_map.get(text_align, 0)
 
-                font_file = find_local_font(LOCAL_FONT_DIR, font_name, font_weight, font_style)
+                font_file = self.font_mgr.find_local_font(font_name, font_weight, font_style)
                 color_tuple = tuple(color) if color else (0, 0, 0)
 
-                x = rect.x0
-                y = rect.y0 + font_size  # baseline offset
-
-                lines = text.split("\n")
-                if font_file:
-                    fname = self.font_mgr._get_or_create_fontname(font_file)
-                    for i, line in enumerate(lines):
-                        if i > 0:
-                            y += font_size * 1.2
-                        try:
-                            page.insert_text(
-                                (x, y), line,
-                                fontname=fname, fontfile=font_file,
-                                fontsize=font_size, color=color_tuple,
-                            )
-                        except Exception:
-                            builtin = "china-s" if any("\u4e00" <= c <= "\u9fff" for c in line) else "helv"
-                            page.insert_text(
-                                (x, y), line,
-                                fontname=builtin, fontsize=font_size, color=color_tuple,
-                            )
-                else:
-                    builtin = "china-s" if any("\u4e00" <= c <= "\u9fff" for c in text) else "helv"
-                    for i, line in enumerate(lines):
-                        if i > 0:
-                            y += font_size * 1.2
-                        page.insert_text(
-                            (x, y), line,
-                            fontname=builtin, fontsize=font_size, color=color_tuple,
-                        )
+                self.font_mgr.insert_textbox(
+                    page, rect, text,
+                    font_file=font_file, font_name=font_name,
+                    font_size=font_size, color=color_tuple, align=align,
+                )
 
             elif el_type == "image":
                 image_id = el.get("image_id", "")
                 ext = el.get("ext", ".png")
+                angle = el.get("angle", 0)
                 if not image_id:
                     continue
 
@@ -1003,6 +985,9 @@ class PDFService:
 
                 with open(image_path, "rb") as f:
                     img_bytes = f.read()
+
+                if angle and angle % 360 != 0:
+                    img_bytes = _rotate_image_bytes(img_bytes, angle, ext)
 
                 page.insert_image(rect, stream=img_bytes, keep_proportion=True)
 
@@ -1118,3 +1103,29 @@ class PDFService:
     def close(self):
         """关闭文档，释放内存"""
         self.doc.close()
+
+
+def _rotate_image_bytes(img_bytes: bytes, angle: float, ext: str = ".png") -> bytes:
+    """旋转图片字节，保持原始格式和背景色。"""
+    from PIL import Image
+
+    pil_img = Image.open(io.BytesIO(img_bytes))
+    has_alpha = pil_img.mode in ('RGBA', 'LA', 'PA')
+
+    if has_alpha:
+        rotated = pil_img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+    else:
+        rotated = pil_img.convert('RGBA').rotate(
+            -angle, expand=True, resample=Image.BICUBIC,
+            fillcolor=(255, 255, 255, 255)
+        )
+        bg = Image.new('RGBA', rotated.size, (255, 255, 255, 255))
+        bg.paste(rotated, mask=rotated.split()[3] if rotated.mode == 'RGBA' else None)
+        rotated = bg.convert('RGB')
+
+    buf = io.BytesIO()
+    if ext.lower() in ('.jpg', '.jpeg'):
+        rotated.save(buf, format='JPEG', quality=90)
+    else:
+        rotated.save(buf, format='PNG')
+    return buf.getvalue()

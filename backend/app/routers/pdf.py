@@ -13,8 +13,7 @@ from app.models.pdf import (
     ImageBlock, DrawingBlock, Paragraph, FontVariant,
 )
 from app.services.pdf_service import PDFService
-from app.services.font_manager import scan_local_fonts
-from app.config import UPLOAD_DIR, LOCAL_FONT_DIR, IMAGE_DIR
+from app.config import UPLOAD_DIR, IMAGE_DIR
 
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
@@ -25,7 +24,14 @@ pdf_services: Dict[str, PDFService] = {}
 @router.get("/fonts", response_model=list[FontVariant])
 async def get_fonts():
     """获取可用字体列表及变体信息"""
-    return scan_local_fonts(LOCAL_FONT_DIR)
+    # 从任意一个 PDFService 实例获取 FontManager，或创建默认实例
+    if pdf_services:
+        svc = next(iter(pdf_services.values()))
+        return svc.font_mgr.scan_local_fonts()
+    # 没有上传文件时，创建临时 FontManager
+    from app.services.font_manager import FontManager
+    from app.config import LOCAL_FONT_DIR
+    return FontManager(local_font_dir=LOCAL_FONT_DIR).scan_local_fonts()
 
 
 @router.post("/{file_id}/upload_image")

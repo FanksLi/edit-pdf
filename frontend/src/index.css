@@ -1,5 +1,52 @@
 @import "tailwindcss";
 
+@font-face { font-family: 'Arimo'; src: url('/fonts/Arimo/Arimo-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Arimo'; src: url('/fonts/Arimo/Arimo-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Arimo'; src: url('/fonts/Arimo/Arimo-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Arimo'; src: url('/fonts/Arimo/Arimo-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Caladea'; src: url('/fonts/Caladea/Caladea-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Caladea'; src: url('/fonts/Caladea/Caladea-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Caladea'; src: url('/fonts/Caladea/Caladea-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Caladea'; src: url('/fonts/Caladea/Caladea-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Carlito'; src: url('/fonts/Carlito/Carlito-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Carlito'; src: url('/fonts/Carlito/Carlito-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Carlito'; src: url('/fonts/Carlito/Carlito-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Carlito'; src: url('/fonts/Carlito/Carlito-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Cousine'; src: url('/fonts/Cousine/Cousine-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Cousine'; src: url('/fonts/Cousine/Cousine-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Cousine'; src: url('/fonts/Cousine/Cousine-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Cousine'; src: url('/fonts/Cousine/Cousine-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Liberation_Serif'; src: url('/fonts/Liberation_Serif/LiberationSerif-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Liberation_Serif'; src: url('/fonts/Liberation_Serif/LiberationSerif-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Liberation_Serif'; src: url('/fonts/Liberation_Serif/LiberationSerif-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Liberation_Serif'; src: url('/fonts/Liberation_Serif/LiberationSerif-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Open_Sans'; src: url('/fonts/Open_Sans/OpenSans-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Open_Sans'; src: url('/fonts/Open_Sans/OpenSans-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Open_Sans'; src: url('/fonts/Open_Sans/OpenSans-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Open_Sans'; src: url('/fonts/Open_Sans/OpenSans-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Roboto'; src: url('/fonts/Roboto/Roboto-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Roboto'; src: url('/fonts/Roboto/Roboto-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Roboto'; src: url('/fonts/Roboto/Roboto-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Roboto'; src: url('/fonts/Roboto/Roboto-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'Roboto_Mono'; src: url('/fonts/Roboto_Mono/RobotoMono-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Roboto_Mono'; src: url('/fonts/Roboto_Mono/RobotoMono-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Roboto_Mono'; src: url('/fonts/Roboto_Mono/RobotoMono-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Roboto_Mono'; src: url('/fonts/Roboto_Mono/RobotoMono-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
+@font-face { font-family: 'SimHei'; src: url('/fonts/SimHei/SimHei.ttf'); font-weight: 400; font-style: normal; }
+
+@font-face { font-family: 'Tinos'; src: url('/fonts/Tinos/Tinos-Regular.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Tinos'; src: url('/fonts/Tinos/Tinos-Bold.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Tinos'; src: url('/fonts/Tinos/Tinos-Italic.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Tinos'; src: url('/fonts/Tinos/Tinos-BoldItalic.ttf'); font-weight: 700; font-style: italic; }
+
 /* 自定义样式 */
 body {
   margin: 0;

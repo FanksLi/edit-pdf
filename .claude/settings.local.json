@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from app.services.font_manager import scan_local_fonts; from app.config import LOCAL_FONT_DIR; import json; print\\(json.dumps\\(scan_local_fonts\\(LOCAL_FONT_DIR\\), ensure_ascii=False, indent=2\\)\\)\")",
+      "Bash(python -c \":*)"
+    ]
+  }
+}

@@ -14,10 +14,11 @@ function PDFViewer() {
   const [currentPage, setCurrentPage] = useState(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const [selectedObject, setSelectedObject] = useState(null);
+  const [selectionSnapshot, setSelectionSnapshot] = useState(null);
   const [fonts, setFonts] = useState([]);
-  const [activeCanvas, setActiveCanvas] = useState(null);
 
+  const selectedObjRef = useRef(null);
+  const activeCanvasRef = useRef(null);
   const pageRefs = useRef({}); // pageNum → ref
   const scrollContainerRef = useRef(null);
   const visiblePageRef = useRef(0);
@@ -95,6 +96,33 @@ function PDFViewer() {
     return () => clearInterval(interval);
   }, []);
 
+  const handleUndo = useCallback(() => {
+    const ref = pageRefs.current[visiblePageRef.current];
+    if (ref) {
+      ref.undo();
+      setCanUndo(ref.canUndo());
+      setCanRedo(ref.canRedo());
+    }
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const ref = pageRefs.current[visiblePageRef.current];
+    if (ref) {
+      ref.redo();
+      setCanUndo(ref.canUndo());
+      setCanRedo(ref.canRedo());
+    }
+  }, []);
+
+  const scrollToPage = useCallback((pageNum) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const el = container.querySelector(`[data-page="${pageNum}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
+
   // 快捷键
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -114,38 +142,40 @@ function PDFViewer() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pageCount]);
+  }, [pageCount, handleUndo, handleRedo, scrollToPage]);
+
+  const handleSelectionChange = useCallback((obj, canvas) => {
+    selectedObjRef.current = obj;
+    activeCanvasRef.current = canvas;
+    if (obj) {
+      setSelectionSnapshot({
+        type: obj.type,
+        text: obj.text,
+        fontSize: obj.fontSize,
+        fontFamily: obj.fontFamily,
+        fontWeight: obj.fontWeight,
+        fontStyle: obj.fontStyle,
+        fill: obj.fill,
+        textAlign: obj.textAlign,
+        opacity: obj.opacity,
+        scaleX: obj.scaleX,
+        scaleY: obj.scaleY,
+        angle: obj.angle,
+        _newElement: obj._newElement,
+        _elementType: obj._elementType,
+        _elementProps: obj._elementProps ? { ...obj._elementProps } : null,
+        _originalFontName: obj._pdfData?.originalFontName || null,
+      });
+    } else {
+      setSelectionSnapshot(null);
+    }
+  }, []);
 
   // 加载字体列表
   useEffect(() => {
     if (!fileId) return;
     getFonts().then(setFonts).catch(console.error);
   }, [fileId]);
-
-  const handleUndo = useCallback(() => {
-    const ref = pageRefs.current[visiblePageRef.current];
-    if (ref) {
-      ref.undo();
-      setCanUndo(ref.canUndo());
-      setCanRedo(ref.canRedo());
-    }
-  }, []);
-
-  const handleRedo = useCallback(() => {
-    const ref = pageRefs.current[visiblePageRef.current];
-    if (ref) {
-      ref.redo();
-      setCanUndo(ref.canUndo());
-      setCanRedo(ref.canRedo());
-    }
-  }, []);
-
-  const handleSelectionChange = useCallback((obj, canvas) => {
-    setSelectedObject(obj);
-    if (obj) {
-      setActiveCanvas(canvas);
-    }
-  }, []);
 
   const handleAddText = useCallback(() => {
     const ref = pageRefs.current[visiblePageRef.current];
@@ -171,53 +201,68 @@ function PDFViewer() {
   }, [fileId]);
 
   const handleDelete = useCallback(() => {
-    if (!selectedObject || !activeCanvas) return;
-    activeCanvas.remove(selectedObject);
-    activeCanvas.requestRenderAll();
-    setSelectedObject(null);
-    setActiveCanvas(null);
-  }, [selectedObject, activeCanvas]);
+    const obj = selectedObjRef.current;
+    const canvas = activeCanvasRef.current;
+    if (!obj || !canvas) return;
+    canvas.remove(obj);
+    canvas.requestRenderAll();
+    selectedObjRef.current = null;
+    activeCanvasRef.current = null;
+    setSelectionSnapshot(null);
+  }, []);
 
   const handlePropertyChange = useCallback((prop, value) => {
-    if (!selectedObject || !activeCanvas) return;
+    const obj = selectedObjRef.current;
+    const canvas = activeCanvasRef.current;
+    if (!obj || !canvas) return;
 
     if (prop === 'fontFamily') {
-      selectedObject.set('fontFamily', `${value}, Arial, sans-serif`);
-      if (selectedObject._elementProps) {
-        selectedObject._elementProps.fontFamily = value;
+      obj.set('fontFamily', `${value}, Arial, sans-serif`);
+      if (obj._elementProps) {
+        obj._elementProps = { ...obj._elementProps, fontFamily: value };
       }
     } else if (prop === 'fontSize') {
-      selectedObject.set('fontSize', value);
-      if (selectedObject._elementProps) {
-        selectedObject._elementProps.fontSize = value;
+      obj.set('fontSize', value);
+      if (obj._elementProps) {
+        obj._elementProps = { ...obj._elementProps, fontSize: value };
       }
     } else if (prop === 'fontWeight') {
-      selectedObject.set('fontWeight', value);
+      obj.set('fontWeight', value);
     } else if (prop === 'fontStyle') {
-      selectedObject.set('fontStyle', value);
+      obj.set('fontStyle', value);
     } else if (prop === 'fill') {
-      selectedObject.set('fill', value);
+      obj.set('fill', value);
     } else if (prop === 'textAlign') {
-      selectedObject.set('textAlign', value);
+      obj.set('textAlign', value);
     } else if (prop === 'scaleX') {
-      selectedObject.set('scaleX', value);
+      obj.set('scaleX', value);
     } else if (prop === 'scaleY') {
-      selectedObject.set('scaleY', value);
+      obj.set('scaleY', value);
     } else if (prop === 'opacity') {
-      selectedObject.set('opacity', value);
+      obj.set('opacity', value);
+    } else if (prop === 'angle') {
+      obj.set('angle', value);
     }
 
-    activeCanvas.requestRenderAll();
-    setSelectedObject(selectedObject);
-  }, [selectedObject, activeCanvas]);
-
-  const scrollToPage = useCallback((pageNum) => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const el = container.querySelector(`[data-page="${pageNum}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    canvas.requestRenderAll();
+    setSelectionSnapshot({
+      type: obj.type,
+      text: obj.text,
+      fontSize: obj.fontSize,
+      fontFamily: obj.fontFamily,
+      fontWeight: obj.fontWeight,
+      fontStyle: obj.fontStyle,
+      fill: obj.fill,
+      textAlign: obj.textAlign,
+      opacity: obj.opacity,
+      scaleX: obj.scaleX,
+      scaleY: obj.scaleY,
+      angle: obj.angle,
+      _newElement: obj._newElement,
+      _elementType: obj._elementType,
+      _elementProps: obj._elementProps ? { ...obj._elementProps } : null,
+      _originalFontName: obj._pdfData?.originalFontName || null,
+    });
   }, []);
 
   const handleExport = async () => {
@@ -324,8 +369,7 @@ function PDFViewer() {
 
       {/* 操作栏 */}
       <Toolbar
-        selectedObject={selectedObject}
-        canvas={activeCanvas}
+        selectionSnapshot={selectionSnapshot}
         fonts={fonts}
         onAddText={handleAddText}
         onAddImage={handleAddImage}

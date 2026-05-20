@@ -14,8 +14,7 @@ const FONT_OPTIONS = [
 ];
 
 function Toolbar({
-  selectedObject,
-  canvas,
+  selectionSnapshot,
   fonts,
   onAddText,
   onAddImage,
@@ -24,7 +23,7 @@ function Toolbar({
 }) {
   const fileInputRef = useRef(null);
 
-  if (!selectedObject) {
+  if (!selectionSnapshot) {
     return (
       <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
         <button
@@ -56,12 +55,14 @@ function Toolbar({
     );
   }
 
-  const isNewElement = selectedObject._newElement;
-  const isText = selectedObject.type === 'textbox' || selectedObject.type === 'i-text';
-  const isImage = selectedObject.type === 'image';
+  const isNewElement = selectionSnapshot?._newElement;
+  const isText = selectionSnapshot?.type === 'textbox' || selectionSnapshot?.type === 'i-text';
+  const isImage = selectionSnapshot?.type === 'image';
 
   if (isText) {
-    const currentFont = selectedObject._elementProps?.fontFamily || 'Roboto';
+    const currentFont = selectionSnapshot?._elementProps?.fontFamily
+      || selectionSnapshot?._originalFontName
+      || 'Roboto';
     const fontInfo = fonts?.find(f => f.family === currentFont);
     const variants = fontInfo?.variants || ['regular'];
     const supportsBold = variants.includes('bold') || variants.includes('bolditalic');
@@ -71,10 +72,13 @@ function Toolbar({
       <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
         {/* 字体选择 */}
         <select
-          value={currentFont}
+          value={FONT_OPTIONS.some(f => f.family === currentFont) ? currentFont : ''}
           onChange={(e) => onPropertyChange('fontFamily', e.target.value)}
           className="px-2 py-1 border border-gray-300 rounded text-sm bg-white max-w-[140px]"
         >
+          {!FONT_OPTIONS.some(f => f.family === currentFont) && (
+            <option value="" disabled>{currentFont}</option>
+          )}
           {FONT_OPTIONS.map(f => (
             <option key={f.family} value={f.family}>{f.display_name}</option>
           ))}
@@ -83,7 +87,7 @@ function Toolbar({
         {/* 字号 */}
         <input
           type="number"
-          value={Math.round((selectedObject.fontSize || 16) / (150 / 72))}
+          value={Math.round((selectionSnapshot?.fontSize || 16) / (150 / 72))}
           onChange={(e) => {
             const pdfSize = parseFloat(e.target.value) || 12;
             onPropertyChange('fontSize', pdfSize * (150 / 72));
@@ -95,10 +99,10 @@ function Toolbar({
 
         {/* 粗体 */}
         <button
-          onClick={() => onPropertyChange('fontWeight', selectedObject.fontWeight === 'bold' ? 'normal' : 'bold')}
+          onClick={() => onPropertyChange('fontWeight', selectionSnapshot?.fontWeight === 'bold' ? 'normal' : 'bold')}
           disabled={!supportsBold}
           className={`px-2 py-1 rounded text-sm font-bold ${
-            selectedObject.fontWeight === 'bold'
+            selectionSnapshot?.fontWeight === 'bold'
               ? 'bg-gray-700 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
           } ${!supportsBold ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -109,10 +113,10 @@ function Toolbar({
 
         {/* 斜体 */}
         <button
-          onClick={() => onPropertyChange('fontStyle', selectedObject.fontStyle === 'italic' ? 'normal' : 'italic')}
+          onClick={() => onPropertyChange('fontStyle', selectionSnapshot?.fontStyle === 'italic' ? 'normal' : 'italic')}
           disabled={!supportsItalic}
           className={`px-2 py-1 rounded text-sm italic ${
-            selectedObject.fontStyle === 'italic'
+            selectionSnapshot?.fontStyle === 'italic'
               ? 'bg-gray-700 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
           } ${!supportsItalic ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -124,7 +128,7 @@ function Toolbar({
         {/* 颜色 */}
         <input
           type="color"
-          value={selectedObject.fill || '#000000'}
+          value={selectionSnapshot?.fill || '#000000'}
           onChange={(e) => onPropertyChange('fill', e.target.value)}
           className="w-8 h-8 border border-gray-300 rounded cursor-pointer"
           title="文字颜色"
@@ -136,7 +140,7 @@ function Toolbar({
             <button
               onClick={() => onPropertyChange('textAlign', 'left')}
               className={`px-2 py-1 rounded text-sm ${
-                selectedObject.textAlign === 'left' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                selectionSnapshot?.textAlign === 'left' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               } cursor-pointer`}
               title="左对齐"
             >
@@ -145,7 +149,7 @@ function Toolbar({
             <button
               onClick={() => onPropertyChange('textAlign', 'center')}
               className={`px-2 py-1 rounded text-sm ${
-                selectedObject.textAlign === 'center' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                selectionSnapshot?.textAlign === 'center' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               } cursor-pointer`}
               title="居中"
             >
@@ -154,7 +158,7 @@ function Toolbar({
             <button
               onClick={() => onPropertyChange('textAlign', 'right')}
               className={`px-2 py-1 rounded text-sm ${
-                selectedObject.textAlign === 'right' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                selectionSnapshot?.textAlign === 'right' ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               } cursor-pointer`}
               title="右对齐"
             >
@@ -180,11 +184,11 @@ function Toolbar({
   }
 
   if (isImage) {
-    const origW = selectedObject._elementProps?.originalWidth || selectedObject.width;
-    const origH = selectedObject._elementProps?.originalHeight || selectedObject.height;
-    const displayW = Math.round(origW * selectedObject.scaleX);
-    const displayH = Math.round(origH * selectedObject.scaleY);
-    const opacity = Math.round((selectedObject.opacity ?? 1) * 100);
+    const origW = selectionSnapshot?._elementProps?.originalWidth || selectionSnapshot?.width;
+    const origH = selectionSnapshot?._elementProps?.originalHeight || selectionSnapshot?.height;
+    const displayW = Math.round(origW * selectionSnapshot?.scaleX);
+    const displayH = Math.round(origH * selectionSnapshot?.scaleY);
+    const angle = Math.round(selectionSnapshot?.angle || 0);
 
     return (
       <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 overflow-x-auto">
@@ -216,18 +220,16 @@ function Toolbar({
           />
         </label>
 
-        {/* 不透明度 */}
+        {/* 旋转 */}
         <label className="flex items-center gap-1 text-sm text-gray-600 whitespace-nowrap">
-          不透明度
+          旋转
           <input
-            type="range"
-            min="0"
-            max="100"
-            value={opacity}
-            onChange={(e) => onPropertyChange('opacity', parseInt(e.target.value) / 100)}
-            className="w-20"
+            type="number"
+            value={angle}
+            onChange={(e) => onPropertyChange('angle', parseFloat(e.target.value) || 0)}
+            className="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-center"
           />
-          <span className="text-xs text-gray-500 w-8">{opacity}%</span>
+          °
         </label>
 
         <div className="flex-1" />
