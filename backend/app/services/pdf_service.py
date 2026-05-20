@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from app.config import RENDER_DIR, OUTPUT_DIR
+from app.config import RENDER_DIR, OUTPUT_DIR, IMAGE_DIR
 from app.services.font_manager import FontManager
 
 
@@ -933,6 +933,79 @@ class PDFService:
                 shape.finish(fill=fill_color, color=md["stroke"])
                 shape.commit()
 
+    def _apply_new_elements(self, page, doc, new_elements: list):
+        """在页面上插入新增的文本和图片元素。
+
+        在已有元素编辑之后调用，纯新增，不涉及涂改。
+        """
+        from app.services.font_manager import find_local_font
+        from app.config import LOCAL_FONT_DIR
+
+        for el in new_elements:
+            el_type = el.get("type", "")
+            bbox = el.get("bbox", [0, 0, 0, 0])
+            rect = fitz.Rect(bbox)
+
+            if el_type == "text":
+                text = el.get("text", "")
+                if not text.strip():
+                    continue
+
+                font_name = el.get("font_name", "Roboto")
+                font_size = el.get("font_size", 12.0)
+                color = el.get("color", [0, 0, 0])
+                font_weight = el.get("font_weight", "normal")
+                font_style = el.get("font_style", "normal")
+
+                font_file = find_local_font(LOCAL_FONT_DIR, font_name, font_weight, font_style)
+                color_tuple = tuple(color) if color else (0, 0, 0)
+
+                x = rect.x0
+                y = rect.y0 + font_size  # baseline offset
+
+                lines = text.split("\n")
+                if font_file:
+                    fname = self.font_mgr._get_or_create_fontname(font_file)
+                    for i, line in enumerate(lines):
+                        if i > 0:
+                            y += font_size * 1.2
+                        try:
+                            page.insert_text(
+                                (x, y), line,
+                                fontname=fname, fontfile=font_file,
+                                fontsize=font_size, color=color_tuple,
+                            )
+                        except Exception:
+                            builtin = "china-s" if any("\u4e00" <= c <= "\u9fff" for c in line) else "helv"
+                            page.insert_text(
+                                (x, y), line,
+                                fontname=builtin, fontsize=font_size, color=color_tuple,
+                            )
+                else:
+                    builtin = "china-s" if any("\u4e00" <= c <= "\u9fff" for c in text) else "helv"
+                    for i, line in enumerate(lines):
+                        if i > 0:
+                            y += font_size * 1.2
+                        page.insert_text(
+                            (x, y), line,
+                            fontname=builtin, fontsize=font_size, color=color_tuple,
+                        )
+
+            elif el_type == "image":
+                image_id = el.get("image_id", "")
+                ext = el.get("ext", ".png")
+                if not image_id:
+                    continue
+
+                image_path = IMAGE_DIR / f"{self.file_id}_{image_id}{ext}"
+                if not image_path.exists():
+                    continue
+
+                with open(image_path, "rb") as f:
+                    img_bytes = f.read()
+
+                page.insert_image(rect, stream=img_bytes, keep_proportion=True)
+
     def modify_page(self, page_num: int, paragraph_edits: List[Dict], image_edits: List[Dict] = None, dpi: int = 150) -> Dict:
         """修改页面并返回渲染结果（实时预览用）"""
         if image_edits is None:
@@ -980,10 +1053,16 @@ class PDFService:
             para_edits = edits.get("paragraph_edits", [])
             img_edits = edits.get("image_edits", [])
             draw_edits = edits.get("drawing_edits", [])
-            if not para_edits and not img_edits and not draw_edits:
+            new_elements = edits.get("new_elements", [])
+            if not para_edits and not img_edits and not draw_edits and not new_elements:
                 continue
             page = tmp_doc[page_num]
-            self._apply_all_edits(page, tmp_doc, para_edits, img_edits, draw_edits)
+            # 先处理已有元素编辑
+            if para_edits or img_edits or draw_edits:
+                self._apply_all_edits(page, tmp_doc, para_edits, img_edits, draw_edits)
+            # 再插入新增元素
+            if new_elements:
+                self._apply_new_elements(page, tmp_doc, new_elements)
 
         output_path = OUTPUT_DIR / f"{self.file_id}_edited.pdf"
         self.font_mgr.save_with_subset(tmp_doc, str(output_path))
