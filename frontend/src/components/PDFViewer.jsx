@@ -2,7 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import FileUpload from './FileUpload';
 import PageCanvas from './PageCanvas';
 import PageSidebar from './PageSidebar';
-import { uploadPDF, exportAllPages } from '../services/api';
+import Toolbar from './Toolbar';
+import { uploadPDF, exportAllPages, getFonts, uploadImage } from '../services/api';
 
 function PDFViewer() {
   const [fileId, setFileId] = useState(null);
@@ -13,6 +14,9 @@ function PDFViewer() {
   const [currentPage, setCurrentPage] = useState(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [selectedObject, setSelectedObject] = useState(null);
+  const [fonts, setFonts] = useState([]);
+  const [activeCanvas, setActiveCanvas] = useState(null);
 
   const pageRefs = useRef({}); // pageNum → ref
   const scrollContainerRef = useRef(null);
@@ -112,6 +116,12 @@ function PDFViewer() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [pageCount]);
 
+  // 加载字体列表
+  useEffect(() => {
+    if (!fileId) return;
+    getFonts().then(setFonts).catch(console.error);
+  }, [fileId]);
+
   const handleUndo = useCallback(() => {
     const ref = pageRefs.current[visiblePageRef.current];
     if (ref) {
@@ -129,6 +139,77 @@ function PDFViewer() {
       setCanRedo(ref.canRedo());
     }
   }, []);
+
+  const handleSelectionChange = useCallback((obj, canvas) => {
+    setSelectedObject(obj);
+    if (obj) {
+      setActiveCanvas(canvas);
+    }
+  }, []);
+
+  const handleAddText = useCallback(() => {
+    const ref = pageRefs.current[visiblePageRef.current];
+    if (ref) ref.addNewText();
+  }, []);
+
+  const handleAddImage = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const ref = pageRefs.current[visiblePageRef.current];
+    if (!ref || !fileId) return;
+
+    try {
+      const result = await uploadImage(fileId, file);
+      const imageUrl = `/images/${fileId}_${result.image_id}${result.ext}`;
+      ref.addNewImage(imageUrl, result.image_id, result.ext);
+    } catch (err) {
+      console.error('Upload image failed:', err);
+    }
+
+    e.target.value = '';
+  }, [fileId]);
+
+  const handleDelete = useCallback(() => {
+    if (!selectedObject || !activeCanvas) return;
+    activeCanvas.remove(selectedObject);
+    activeCanvas.requestRenderAll();
+    setSelectedObject(null);
+    setActiveCanvas(null);
+  }, [selectedObject, activeCanvas]);
+
+  const handlePropertyChange = useCallback((prop, value) => {
+    if (!selectedObject || !activeCanvas) return;
+
+    if (prop === 'fontFamily') {
+      selectedObject.set('fontFamily', `${value}, Arial, sans-serif`);
+      if (selectedObject._elementProps) {
+        selectedObject._elementProps.fontFamily = value;
+      }
+    } else if (prop === 'fontSize') {
+      selectedObject.set('fontSize', value);
+      if (selectedObject._elementProps) {
+        selectedObject._elementProps.fontSize = value;
+      }
+    } else if (prop === 'fontWeight') {
+      selectedObject.set('fontWeight', value);
+    } else if (prop === 'fontStyle') {
+      selectedObject.set('fontStyle', value);
+    } else if (prop === 'fill') {
+      selectedObject.set('fill', value);
+    } else if (prop === 'textAlign') {
+      selectedObject.set('textAlign', value);
+    } else if (prop === 'scaleX') {
+      selectedObject.set('scaleX', value);
+    } else if (prop === 'scaleY') {
+      selectedObject.set('scaleY', value);
+    } else if (prop === 'opacity') {
+      selectedObject.set('opacity', value);
+    }
+
+    activeCanvas.requestRenderAll();
+    setSelectedObject(selectedObject);
+  }, [selectedObject, activeCanvas]);
 
   const scrollToPage = useCallback((pageNum) => {
     const container = scrollContainerRef.current;
@@ -150,7 +231,7 @@ function PDFViewer() {
         const ref = pageRefs.current[i];
         if (ref) {
           const edits = ref.collectEdits();
-          if (edits.paragraph_edits.length > 0 || edits.image_edits.length > 0 || edits.drawing_edits.length > 0) {
+          if (edits.paragraph_edits.length > 0 || edits.image_edits.length > 0 || edits.drawing_edits.length > 0 || (edits.new_elements && edits.new_elements.length > 0)) {
             pagesEdits[String(i)] = edits;
           }
         }
@@ -241,6 +322,17 @@ function PDFViewer() {
         </button>
       </div>
 
+      {/* 操作栏 */}
+      <Toolbar
+        selectedObject={selectedObject}
+        canvas={activeCanvas}
+        fonts={fonts}
+        onAddText={handleAddText}
+        onAddImage={handleAddImage}
+        onDelete={handleDelete}
+        onPropertyChange={handlePropertyChange}
+      />
+
       {/* 主体：侧边栏 + 滚动区域 */}
       <div className="flex flex-1 overflow-hidden">
         {/* 侧边栏（内部响应式：PC 左侧 / 手机底部） */}
@@ -264,6 +356,7 @@ function PDFViewer() {
                 pageNum={i}
                 pageWidth={size.width}
                 pageHeight={size.height}
+                onSelectionChange={handleSelectionChange}
               />
             </div>
           ))}
