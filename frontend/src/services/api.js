@@ -78,3 +78,31 @@ export async function exportAllPages(fileId, pagesEdits) {
 export async function getPageThumbnail(fileId, pageNum) {
   return getPageRender(fileId, pageNum, 50);
 }
+
+/**
+ * 获取可用字体列表
+ */
+export async function getFonts() {
+  const res = await fetch(`${API_BASE}/fonts`);
+  if (!res.ok) {
+    throw new Error('Get fonts failed');
+  }
+  return res.json();
+}
+
+/**
+ * 上传图片
+ */
+export async function uploadImage(fileId, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}/${fileId}/upload_image`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Upload image failed' }));
+    throw new Error(error.error || 'Upload image failed');
+  }
+  return res.json();
+}
