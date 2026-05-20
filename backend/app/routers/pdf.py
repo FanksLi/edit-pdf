@@ -2,13 +2,13 @@
 
 import os
 from typing import Dict
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.models.pdf import (
     UploadResponse, PageContentResponse, RenderResponse,
     ModifyRequest, ModifyResponse, ErrorResponse,
-    ImageBlock, DrawingBlock, Paragraph
+    ImageBlock, DrawingBlock, Paragraph,
 )
 from app.services.pdf_service import PDFService
 from app.config import UPLOAD_DIR
@@ -132,24 +132,50 @@ async def modify_page(file_id: str, page_num: int, request: ModifyRequest, dpi: 
         raise HTTPException(status_code=500, detail=f"Failed to modify page: {str(e)}")
 
 
-@router.get("/{file_id}/export", responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
-async def export_pdf(file_id: str):
-    """导出修改后的 PDF"""
+@router.post("/{file_id}/page/{page_num}/export_edits", responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def export_edits(file_id: str, page_num: int, request: dict, dpi: int = Query(150, ge=50, le=300)):
+    """应用所有编辑并直接导出 PDF（一次性操作，不修改内存中的 PDF）"""
     if file_id not in pdf_services:
         raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
     service = pdf_services[file_id]
 
     try:
-        output_path = service.export_pdf()
+        paragraph_edits = request.get("paragraph_edits", [])
+        image_edits = request.get("image_edits", [])
+        drawing_edits = request.get("drawing_edits", [])
 
-        service.close()
-        pdf_services.pop(file_id, None)
+        output_path = service.apply_edits_and_export(page_num, paragraph_edits, image_edits, drawing_edits)
 
         return FileResponse(
             path=output_path,
             media_type="application/pdf",
-            filename=f"{file_id}_edited.pdf"
+            filename="edited.pdf",
         )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export: {str(e)}")
+
+
+@router.post("/{file_id}/export_all", responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def export_all_pages(file_id: str, request: dict):
+    """多页统一导出：接收所有页的编辑，逐页应用后导出完整 PDF"""
+    if file_id not in pdf_services:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+
+    service = pdf_services[file_id]
+
+    try:
+        pages_edits = request.get("pages", {})
+        output_path = service.apply_all_pages_edits(pages_edits)
+
+        return FileResponse(
+            path=output_path,
+            media_type="application/pdf",
+            filename="edited.pdf",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export: {str(e)}")

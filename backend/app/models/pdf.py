@@ -35,7 +35,8 @@ class EditItem(BaseModel):
 
 class ParagraphEditItem(BaseModel):
     """段落编辑项"""
-    bbox: Tuple[float, float, float, float]  # 原始段落 bbox
+    bbox: Tuple[float, float, float, float]  # 原始段落 bbox（用于 redaction）
+    new_bbox: Optional[Tuple[float, float, float, float]] = None  # 新位置（移动后）
     newText: str
     fontSize: float
     fontName: str
@@ -100,6 +101,12 @@ class ImageEditItem(BaseModel):
     old_bbox: Tuple[float, float, float, float]
     new_bbox: Tuple[float, float, float, float]
     image_data: str  # base64 编码
+
+
+class DrawingEditItem(BaseModel):
+    """绘图编辑项（位置移动）"""
+    old_bbox: Tuple[float, float, float, float]
+    new_bbox: Tuple[float, float, float, float]
 
 
 class ModifyRequest(BaseModel):

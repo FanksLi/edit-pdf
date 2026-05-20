@@ -57,12 +57,24 @@ export async function modifyPage(fileId, pageNum, paragraphEdits = [], imageEdit
 }
 
 /**
- * 导出修改后的 PDF
+ * 多页统一导出：接收所有页的编辑，一次性导出完整 PDF
  */
-export async function exportPDF(fileId) {
-  const res = await fetch(`${API_BASE}/${fileId}/export`);
+export async function exportAllPages(fileId, pagesEdits) {
+  const res = await fetch(`${API_BASE}/${fileId}/export_all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pages: pagesEdits }),
+  });
   if (!res.ok) {
-    throw new Error('Export failed');
+    const error = await res.json().catch(() => ({ detail: 'Export failed' }));
+    throw new Error(error.detail || 'Export failed');
   }
   return res.blob();
+}
+
+/**
+ * 获取页面缩略图（低 DPI 渲染）
+ */
+export async function getPageThumbnail(fileId, pageNum) {
+  return getPageRender(fileId, pageNum, 50);
 }

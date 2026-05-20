@@ -1,18 +1,27 @@
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import { Canvas, Textbox, FabricImage, Rect } from 'fabric';
 import { pdfToCanvas, canvasToPdf } from '../utils/coordinate';
+import { getPageText, getPageRender } from '../services/api';
 
-const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, images, drawings, pageHeight }, ref) {
+const PageCanvas = forwardRef(function PageCanvas({ fileId, pageNum, pageWidth, pageHeight }, ref) {
   const canvasElRef = useRef(null);
+  const containerRef = useRef(null);
   const fabricRef = useRef(null);
-  const dirtyRef = useRef(new Set());
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
+  const [loaded, setLoaded] = useState(false);
+  const [content, setContent] = useState(null); // { paragraphs, images, drawings }
+  const [renderSize, setRenderSize] = useState(null);
+  const loadRequestedRef = useRef(false);
 
   const DPI = 150;
   const scale = DPI / 72;
 
-  // 暴露给父组件的方法
+  // 计算 canvas 尺寸
+  const canvasWidth = Math.round(pageWidth * scale);
+  const canvasHeight = Math.round(pageHeight * scale);
+
+  // 暴露方法
   useImperativeHandle(ref, () => ({
     collectEdits() {
       const canvas = fabricRef.current;
@@ -24,7 +33,6 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
 
       for (const obj of canvas.getObjects()) {
         if (!obj._pdfData) continue;
-
         const pdf = obj._pdfData;
 
         if (pdf.originalText !== undefined) {
@@ -37,7 +45,6 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
             const originalLines = pdf.originalText.split('\n').length;
             const currentLines = obj.text.split('\n').length;
             const lineCountDelta = currentLines - originalLines;
-
             const newBottom = newBbox[3];
             const oldBottom = pdf.originalBbox[3];
             const textExpandDelta = lineCountDelta * pdf.lineHeight;
@@ -60,7 +67,6 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
         } else if (pdf.xref !== undefined) {
           const newBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
           const posChanged = newBbox.some((v, i) => Math.abs(v - pdf.originalBbox[i]) > 0.5);
-
           if (posChanged) {
             imageEdits.push({
               xref: pdf.xref,
@@ -72,7 +78,6 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
         } else if (pdf.originalRect !== undefined) {
           const newBbox = canvasToPdf(obj.left, obj.top, obj.getScaledWidth(), obj.getScaledHeight(), scale);
           const posChanged = newBbox.some((v, i) => Math.abs(v - pdf.originalRect[i]) > 0.5);
-
           if (posChanged) {
             drawingEdits.push({
               old_bbox: pdf.originalRect,
@@ -93,12 +98,8 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
       if (!canvas) return false;
 
       const snapshot = undoStackRef.current.pop();
-      // 保存当前状态到 redo 栈
-      const currentSnapshot = _takeSnapshot(canvas);
-      redoStackRef.current.push(currentSnapshot);
-
+      redoStackRef.current.push(_takeSnapshot(canvas));
       _restoreSnapshot(canvas, snapshot);
-      dirtyRef.current = new Set();
       return true;
     },
 
@@ -108,12 +109,8 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
       if (!canvas) return false;
 
       const snapshot = redoStackRef.current.pop();
-      // 保存当前状态到 undo 栈
-      const currentSnapshot = _takeSnapshot(canvas);
-      undoStackRef.current.push(currentSnapshot);
-
+      undoStackRef.current.push(_takeSnapshot(canvas));
       _restoreSnapshot(canvas, snapshot);
-      dirtyRef.current = new Set();
       return true;
     },
 
@@ -123,12 +120,6 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
 
     canRedo() {
       return redoStackRef.current.length > 0;
-    },
-
-    resetHistory() {
-      undoStackRef.current = [];
-      redoStackRef.current = [];
-      dirtyRef.current = new Set();
     },
   }));
 
@@ -157,23 +148,55 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
     canvas.requestRenderAll();
   };
 
-  // 保存快照到 undo 栈，清空 redo
   const saveSnapshot = useCallback(() => {
     const canvas = fabricRef.current;
     if (!canvas) return;
-
-    const snapshot = _takeSnapshot(canvas);
-    undoStackRef.current.push(snapshot);
-    if (undoStackRef.current.length > 50) {
-      undoStackRef.current.shift();
-    }
-    // 新操作清空 redo
+    undoStackRef.current.push(_takeSnapshot(canvas));
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     redoStackRef.current = [];
   }, []);
 
-  // 构建 canvas + 事件监听
+  // IntersectionObserver 懒加载
   useEffect(() => {
-    if (!canvasElRef.current || !renderSize.width) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loaded && !loadRequestedRef.current) {
+          loadRequestedRef.current = true;
+          _loadContent();
+        }
+      },
+      { rootMargin: '200px 0px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fileId, pageNum]);
+
+  const _loadContent = async () => {
+    try {
+      const [textData, renderData] = await Promise.all([
+        getPageText(fileId, pageNum),
+        getPageRender(fileId, pageNum),
+      ]);
+
+      setRenderSize({ width: renderData.width, height: renderData.height });
+      setContent({
+        paragraphs: textData.paragraphs || [],
+        images: textData.images || [],
+        drawings: textData.drawings || [],
+      });
+      setLoaded(true);
+    } catch (e) {
+      console.error(`Failed to load page ${pageNum}:`, e);
+    }
+  };
+
+  // 创建 Fabric canvas + 加载内容
+  useEffect(() => {
+    if (!loaded || !content || !renderSize) return;
 
     if (fabricRef.current) {
       fabricRef.current.dispose();
@@ -189,88 +212,61 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
       backgroundColor: '#ffffff',
     });
     fabricRef.current = canvas;
-    dirtyRef.current = new Set();
     undoStackRef.current = [];
     redoStackRef.current = [];
 
     let snapshotId = 0;
 
-    const onModified = (e) => {
-      saveSnapshot();
-      dirtyRef.current.add(e.target);
-    };
-
-    const onEditingExited = (e) => {
+    canvas.on('object:modified', () => saveSnapshot());
+    canvas.on('text:editing:exited', (e) => {
       const obj = e.target;
       if (obj._pdfData && obj.text !== obj._pdfData.originalText) {
         saveSnapshot();
-        dirtyRef.current.add(obj);
       }
-    };
+    });
 
-    canvas.on('object:modified', onModified);
-    canvas.on('text:editing:exited', onEditingExited);
+    const loadElements = async () => {
+      const elements = [];
 
-    // 加载内容（按 z_index 排序）
-    const loadCanvas = async () => {
-      try {
-        const elements = [];
-
-        for (const d of (drawings || [])) {
-          elements.push({ type: 'drawing', z_index: d.z_index, data: d });
-        }
-        for (const para of paragraphs) {
-          elements.push({ type: 'text', z_index: para.z_index, data: para });
-        }
-        for (const img of images) {
-          elements.push({ type: 'image', z_index: img.z_index, data: img });
-        }
-
-        elements.sort((a, b) => {
-          if (a.z_index !== b.z_index) return a.z_index - b.z_index;
-          const order = { drawing: 0, text: 1, image: 2 };
-          return (order[a.type] || 0) - (order[b.type] || 0);
-        });
-
-        for (const el of elements) {
-          const sid = ++snapshotId;
-          if (el.type === 'drawing') {
-            _addDrawing(canvas, el.data, sid);
-          } else if (el.type === 'text') {
-            _addParagraph(canvas, el.data, sid);
-          } else if (el.type === 'image') {
-            await _addImage(canvas, el.data, sid);
-          }
-        }
-
-        canvas.requestRenderAll();
-      } catch (e) {
-        console.error('Canvas load error:', e);
+      for (const d of (content.drawings || [])) {
+        elements.push({ type: 'drawing', z_index: d.z_index, data: d });
       }
+      for (const para of content.paragraphs) {
+        elements.push({ type: 'text', z_index: para.z_index, data: para });
+      }
+      for (const img of content.images) {
+        elements.push({ type: 'image', z_index: img.z_index, data: img });
+      }
+
+      elements.sort((a, b) => {
+        if (a.z_index !== b.z_index) return a.z_index - b.z_index;
+        const order = { drawing: 0, text: 1, image: 2 };
+        return (order[a.type] || 0) - (order[b.type] || 0);
+      });
+
+      for (const el of elements) {
+        const sid = ++snapshotId;
+        if (el.type === 'drawing') {
+          _addDrawing(canvas, el.data, sid);
+        } else if (el.type === 'text') {
+          _addParagraph(canvas, el.data, sid);
+        } else if (el.type === 'image') {
+          await _addImage(canvas, el.data, sid);
+        }
+      }
+
+      canvas.requestRenderAll();
     };
 
     const _addDrawing = (canvas, d, sid) => {
       const pos = pdfToCanvas(d.rect, scale);
       const fill = d.fill ? `rgb(${Math.round(d.fill[0] * 255)},${Math.round(d.fill[1] * 255)},${Math.round(d.fill[2] * 255)})` : null;
       const stroke = d.stroke ? `rgb(${Math.round(d.stroke[0] * 255)},${Math.round(d.stroke[1] * 255)},${Math.round(d.stroke[2] * 255)})` : null;
-
       const rect = new Rect({
-        left: pos.left,
-        top: pos.top,
-        width: pos.width,
-        height: pos.height,
-        fill,
-        stroke,
-        strokeWidth: 0,
-        originX: 'left',
-        originY: 'top',
+        left: pos.left, top: pos.top, width: pos.width, height: pos.height,
+        fill, stroke, strokeWidth: 0, originX: 'left', originY: 'top',
       });
-      rect._pdfData = {
-        snapshotId: sid,
-        originalRect: [...d.rect],
-        fill: d.fill,
-        stroke: d.stroke,
-      };
+      rect._pdfData = { snapshotId: sid, originalRect: [...d.rect], fill: d.fill, stroke: d.stroke };
       canvas.add(rect);
     };
 
@@ -279,33 +275,21 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
       const r = Math.round(para.color[0] * 255);
       const g = Math.round(para.color[1] * 255);
       const b = Math.round(para.color[2] * 255);
-
       const numLines = para.text.split('\n').length;
       const lineHeightRatio = numLines > 1
         ? pos.height / (numLines * para.fontSize * scale)
         : 1.2;
 
       const textObj = new Textbox(para.text, {
-        left: pos.left,
-        top: pos.top,
-        width: pos.width * 1.07,
-        fontSize: para.fontSize * scale,
-        lineHeight: lineHeightRatio,
-        fill: `rgb(${r},${g},${b})`,
-        fontFamily: 'Helvetica, Arial, sans-serif',
-        editable: true,
-        originX: 'left',
-        originY: 'top',
-        splitByGrapheme: true,
+        left: pos.left, top: pos.top, width: pos.width * 1.07,
+        fontSize: para.fontSize * scale, lineHeight: lineHeightRatio,
+        fill: `rgb(${r},${g},${b})`, fontFamily: 'Helvetica, Arial, sans-serif',
+        editable: true, originX: 'left', originY: 'top', splitByGrapheme: true,
       });
       textObj._pdfData = {
-        snapshotId: sid,
-        originalBbox: [...para.bbox],
-        originalFontSize: para.fontSize,
-        originalFontName: para.fontName,
-        originalText: para.text,
-        originalColor: [...para.color],
-        originalHeight: para.bbox[3] - para.bbox[1],
+        snapshotId: sid, originalBbox: [...para.bbox], originalFontSize: para.fontSize,
+        originalFontName: para.fontName, originalText: para.text,
+        originalColor: [...para.color], originalHeight: para.bbox[3] - para.bbox[1],
         lineHeight: para.lineHeight,
       };
       canvas.add(textObj);
@@ -315,42 +299,42 @@ const FabricCanvas = forwardRef(function FabricCanvas({ renderSize, paragraphs, 
       try {
         const pos = pdfToCanvas(img.bbox, scale);
         const imgObj = await FabricImage.fromURL(img.image_url);
-        imgObj.set({
-          left: pos.left,
-          top: pos.top,
-          originX: 'left',
-          originY: 'top',
-          strokeWidth: 0,
-        });
+        imgObj.set({ left: pos.left, top: pos.top, originX: 'left', originY: 'top', strokeWidth: 0 });
         imgObj.scaleX = pos.width / imgObj.width;
         imgObj.scaleY = pos.height / imgObj.height;
-        imgObj._pdfData = {
-          snapshotId: sid,
-          xref: img.xref,
-          originalBbox: [...img.bbox],
-          imageUrl: img.image_url,
-        };
+        imgObj._pdfData = { snapshotId: sid, xref: img.xref, originalBbox: [...img.bbox], imageUrl: img.image_url };
         canvas.add(imgObj);
       } catch (e) {
         console.error('Failed to load image:', e);
       }
     };
 
-    loadCanvas();
+    loadElements();
 
     return () => {
-      canvas.off('object:modified', onModified);
-      canvas.off('text:editing:exited', onEditingExited);
       if (fabricRef.current) {
         fabricRef.current.dispose();
         fabricRef.current = null;
       }
     };
-  }, [renderSize, paragraphs, images, drawings, saveSnapshot]);
+  }, [loaded, content, renderSize, saveSnapshot]);
 
   return (
-    <canvas ref={canvasElRef} />
+    <div
+      ref={containerRef}
+      data-page={pageNum}
+      className="relative bg-white shadow-md"
+      style={{ width: canvasWidth, height: canvasHeight, margin: '0 auto' }}
+    >
+      {!loaded ? (
+        <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
+          加载中...
+        </div>
+      ) : (
+        <canvas ref={canvasElRef} />
+      )}
+    </div>
   );
 });
 
-export default FabricCanvas;
+export default PageCanvas;

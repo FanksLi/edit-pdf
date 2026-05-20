@@ -9,46 +9,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from app.config import RENDER_DIR, OUTPUT_DIR
+from app.services.font_manager import FontManager
 
-# 系统字体映射：常见 PDF 字体名 → Windows 字体文件路径
-_SYSTEM_FONT_DIR = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "Fonts"
-_SYSTEM_FONT_MAP = {
-    "SimHei": "simhei.ttf",
-    "SimSun": "simsun.ttc",
-    "NSimSun": "simsun.ttc",
-    "MicrosoftYaHei": "msyh.ttc",
-    "Microsoft YaHei": "msyh.ttc",
-    "MicrosoftYaHeiBold": "msyhbd.ttc",
-    "KaiTi": "simkai.ttf",
-    "FangSong": "simfang.ttf",
-    "STSong": "STSONG.TTF",
-    "STHeiti": "STHEITI.TTF",
-    "STKaiti": "STKAITI.TTF",
-    "STFangsong": "STFANGSO.TTF",
-    "Heiti SC": "STHEITI.TTF",
-    "Songti SC": "STSONG.TTF",
-    "PingFang SC": "msyh.ttc",
-    "Hiragino Sans GB": "msyh.ttc",
-    "WenQuanYi Micro Hei": "msyh.ttc",
-    "DengXian": "DENG.TTF",
-    "Arial": "arial.ttf",
-    "Arial Bold": "arialbd.ttf",
-    "Times New Roman": "times.ttf",
-    "Times New Roman Bold": "timesbd.ttf",
-    "Courier New": "cour.ttf",
-    "Calibri": "calibri.ttf",
-}
-
-
-def _find_system_font(font_name: str) -> Optional[str]:
-    """查找系统字体文件路径，找不到返回 None"""
-    # 去掉 PDF 字体名中的子集前缀 (如 "AAAAAA+SimHei")
-    clean = font_name.split("+", 1)[-1] if "+" in font_name else font_name
-    filename = _SYSTEM_FONT_MAP.get(clean) or _SYSTEM_FONT_MAP.get(font_name)
-    if not filename:
-        return None
-    path = _SYSTEM_FONT_DIR / filename
-    return str(path) if path.exists() else None
 
 
 class PDFService:
@@ -57,6 +19,7 @@ class PDFService:
     def __init__(self, file_path: str):
         self.doc = fitz.open(file_path)
         self.file_id = uuid.uuid4().hex
+        self.font_mgr = FontManager()
         self.page_sizes: List[tuple] = []
         for page in self.doc:
             self.page_sizes.append((page.rect.width, page.rect.height))
@@ -139,6 +102,8 @@ class PDFService:
                     ],
                     "spans_bboxes": [s["bbox"] for s in spans],
                     "block_idx": block_idx,
+                    "x0": spans[0]["bbox"][0],
+                    "x1": spans[-1]["bbox"][2],
                 })
 
         if not flat_lines:
@@ -175,12 +140,15 @@ class PDFService:
             prev_line = flat_lines[i]
             curr_line = flat_lines[i + 1]
 
+            # 信号 0: 水平不重叠 — 当前行起点在下一行终点右侧
+            no_horizontal_overlap = curr_line["x0"] >= prev_line["x1"]
+
             # 信号 1: 字号突变（>2pt）
             font_size_changed = abs(curr_line["fontSize"] - prev_line["fontSize"]) > 2
 
             # 跳过异常小 gap（标题内部重叠等）
             if gap < flat_lines[i]["fontSize"] * 0.5:
-                if font_size_changed:
+                if font_size_changed or no_horizontal_overlap:
                     breaks[i] = True
                     current_ref = base_gap
                 continue
@@ -192,7 +160,7 @@ class PDFService:
             min_abs_jump = flat_lines[i]["fontSize"] * 0.5
             gap_jumped = relative_jump > 1.3 and absolute_jump > min_abs_jump
 
-            if gap_jumped or font_size_changed:
+            if gap_jumped or font_size_changed or no_horizontal_overlap:
                 breaks[i] = True
                 # 断开后重置参考间距
                 current_ref = base_gap
@@ -563,11 +531,11 @@ class PDFService:
     def _detect_bg_color(self, page, bbox) -> tuple:
         """采样 bbox 四角外侧像素，自动检测背景色
 
-        采样策略：扩大 clip 区域，采样更远的位置，避开文字
+        策略：取最亮的采样点作为背景色（文字抗锯齿像素偏暗，不影响结果），
+        再用白色吸附消除微弱色偏。
         """
-        # 扩大采样范围，确保远离文字区域
-        margin_x = 20  # 横向扩大
-        margin_y = 10  # 纵向扩大
+        margin_x = 20
+        margin_y = 10
 
         expanded = fitz.Rect(
             max(0, bbox.x0 - margin_x),
@@ -579,27 +547,19 @@ class PDFService:
         pix = page.get_pixmap(matrix=fitz.Matrix(1, 1), clip=expanded, alpha=False)
         w, h = pix.width, pix.height
 
-        # bbox 在 clip 中的像素位置
         bx0 = int(bbox.x0 - expanded.x0)
         by0 = int(bbox.y0 - expanded.y0)
         bx1 = int(bbox.x1 - expanded.x0)
         by1 = int(bbox.y1 - expanded.y0)
 
-        # 采样四角外侧像素，距离 bbox 更远
-        # 使用更大的偏移量，确保远离文字
         colors = []
         corners = [
-            # 左上外侧 - 左边更远处
             (max(0, bx0 - margin_x), max(0, by0 - margin_y)),
-            # 右上外侧 - 右边更远处（如果超出 clip，则用 clip 边缘）
             (min(w - 1, bx1 + min(10, margin_x)), max(0, by0 - margin_y)),
-            # 左下外侧
             (max(0, bx0 - margin_x), min(h - 1, by1 + margin_y)),
-            # 右下外侧
             (min(w - 1, bx1 + min(10, margin_x)), min(h - 1, by1 + margin_y)),
-            # 增加 bbox 正上方和正下方的采样点（远离文字）
-            (bx0 + (bx1 - bx0) // 2, max(0, by0 - margin_y)),  # 中间上方
-            (bx0 + (bx1 - bx0) // 2, min(h - 1, by1 + margin_y)),  # 中间下方
+            (bx0 + (bx1 - bx0) // 2, max(0, by0 - margin_y)),
+            (bx0 + (bx1 - bx0) // 2, min(h - 1, by1 + margin_y)),
         ]
 
         for cx, cy in corners:
@@ -608,12 +568,19 @@ class PDFService:
                 colors.append((pix.samples[idx], pix.samples[idx + 1], pix.samples[idx + 2]))
 
         if not colors:
-            return (1, 1, 1)  # 默认白色
+            return (1, 1, 1)
 
-        # 计算平均值
-        r = sum(c[0] for c in colors) / len(colors) / 255
-        g = sum(c[1] for c in colors) / len(colors) / 255
-        b = sum(c[2] for c in colors) / len(colors) / 255
+        # 取最亮采样点（最接近真实背景色，文字抗锯齿像素偏暗会被排除）
+        brightest = max(colors, key=lambda c: c[0] + c[1] + c[2])
+        r = brightest[0] / 255
+        g = brightest[1] / 255
+        b = brightest[2] / 255
+
+        # 白色吸附：近白色或低饱和度高亮度 → 纯白
+        avg = (r + g + b) / 3
+        spread = max(r, g, b) - min(r, g, b)
+        if avg > 0.82 and spread < 0.12:
+            return (1, 1, 1)
 
         return (r, g, b)
 
@@ -630,84 +597,210 @@ class PDFService:
                 pix = self._apply_smask(pix, smask_xref, page, bbox)
         return pix.tobytes("png")
 
-    def modify_page(self, page_num: int, paragraph_edits: List[Dict], image_edits: List[Dict] = None, dpi: int = 150) -> Dict:
-        """修改页面段落和图片（支持自动下推）
+    def _apply_all_edits(self, page, doc, paragraph_edits, image_edits, drawing_edits):
+        """所有编辑操作的核心方法 — 保存→清除→重绘（Save-Redact-Restore）。
 
-        流程：
-        1. 提取当前内容 + 预提取所有图片 RGBA 数据
-        2. 构建字体缓存
-        3. 标记图片移动 redaction
-        4. 标记段落 redaction（span 级别，保留背景图形）+ 收集下推内容
-        5. apply_redactions()
-        6. 插入段落新文字
-        7. 插入下推后的文字
-        8. 插入下推后的图片（使用预提取的 RGBA 数据）
-        9. 插入移动后的图片
-        10. 重新渲染
+        核心思路：不再尝试精准手术式编辑内容流，而是：
+        1. 保存所有受影响区域内的"旁观者"文字
+        2. 对编辑区域整块清除（add_redact_annot）
+        3. 执行 redaction
+        4. 恢复旁观者文字 + 插入编辑后的内容
         """
-        if image_edits is None:
-            image_edits = []
-
-        if page_num < 0 or page_num >= len(self.doc):
-            raise ValueError(f"Page {page_num} out of range")
-
-        page = self.doc[page_num]
-
-        # Step 1: 提取当前内容（修改前快照）
+        # 1. 提取当前内容
         current_spans = self._extract_spans(page)
         current_images_info = [
             item for item in page.get_image_info(xrefs=True)
             if item.get("xref", 0) > 0
         ]
 
-        # Step 1.5: 预提取所有图片的 RGBA PNG 数据（在 redaction 之前，保留透明度）
+        # 2. 预提取图片数据（redaction 之前，保留原始格式避免膨胀）
         image_rgba_cache = {}
         for img_info in current_images_info:
             xref = img_info.get("xref", 0)
             if not xref:
                 continue
             try:
+                # 优先用 extract_image 保留原始格式（JPEG 存 JPEG，不转 PNG）
+                has_alpha = False
+                smask_xref = self._get_smask_xref(xref)
+                if smask_xref is not None:
+                    has_alpha = True
+
+                if not has_alpha:
+                    img_data = doc.extract_image(xref)
+                    if img_data and img_data.get("image"):
+                        image_rgba_cache[xref] = img_data["image"]
+                        continue
+
+                # 有 alpha 或 extract_image 失败：用 Pixmap 渲染为 PNG
                 bbox = img_info.get("bbox", [0, 0, 0, 0])
-                pix = fitz.Pixmap(self.doc, xref)
+                pix = fitz.Pixmap(doc, xref)
                 if pix.colorspace and pix.colorspace.n > 3:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
-                if not pix.alpha:
-                    smask_xref = self._get_smask_xref(xref)
-                    if smask_xref is not None:
-                        pix = self._apply_smask(pix, smask_xref, page, bbox)
+                if not pix.alpha and smask_xref is not None:
+                    pix = self._apply_smask(pix, smask_xref, page, bbox)
                 image_rgba_cache[xref] = pix.tobytes("png")
             except Exception:
                 pass
 
-        # Step 2: 构建字体缓存
-        font_cache = {}
-        for font_info in page.get_fonts():
+        # 3. 注册系统字体（FontManager 用 insert_text fontfile 方案，无需预注册）
+
+        # 4. 绘图路径删除（必须在段落 redaction 之前！）
+        # 原因：_detect_bg_color 采样像素时，如果色块还在内容流中，
+        # 会返回色块颜色作为"背景色"，导致 redaction 用色块颜色填充。
+        moved_drawings = []
+        for draw_edit in drawing_edits:
             try:
-                xref = font_info[0]
-                name = font_info[3]
-                if not xref or not name:
-                    continue
-                font_data = self.doc.extract_font(xref)
-                content = font_data.get("content")
-                if content:
-                    font_cache[name] = content
-                    if "+" in name:
-                        base = name.split("+", 1)[1]
-                        font_cache[base] = content
+                old_bbox = fitz.Rect(draw_edit["old_bbox"])
+                new_bbox = draw_edit.get("new_bbox")
+                fill = draw_edit.get("fill")
+                stroke = draw_edit.get("stroke")
+                if new_bbox:
+                    moved_drawings.append({"new_bbox": new_bbox, "fill": fill, "stroke": stroke})
+
+                page_h = page.rect.height
+                target_x = old_bbox.x0
+                target_y = page_h - old_bbox.y1
+                target_w = old_bbox.x1 - old_bbox.x0
+                target_h = old_bbox.y1 - old_bbox.y0
+                tolerance = 1.0
+
+                for xref in page.get_contents():
+                    stream_bytes = doc.xref_stream(xref)
+                    if not stream_bytes:
+                        continue
+                    text = stream_bytes.decode('latin-1')
+                    orig_len = len(text)
+
+                    for rm in re.finditer(
+                        r'(\d+\.?\d*)\s+(\d+\.?\d*)\s+(\d+\.?\d*)\s+(\d+\.?\d*)\s+re', text
+                    ):
+                        bx, by, bw, bh = (float(rm.group(i)) for i in range(1, 5))
+                        if (abs(bx - target_x) < tolerance and
+                                abs(by - target_y) < tolerance and
+                                abs(bw - target_w) < tolerance and
+                                abs(bh - target_h) < tolerance):
+                            bs = max(text.rfind('\nq', 0, rm.start()),
+                                    text.rfind(' q', 0, rm.start()))
+                            if bs >= 0:
+                                bs += 1
+                            else:
+                                continue
+                            be = text.find('Q', rm.end())
+                            while be >= 0 and be > 0 and text[be - 1] not in ' \n\t\r':
+                                be = text.find('Q', be + 1)
+                            if be >= 0:
+                                be += 1
+                            else:
+                                continue
+                            text = text[:bs] + text[be:]
+                            break
+
+                    if len(text) != orig_len:
+                        doc.update_stream(xref, text.encode('latin-1'))
+                        break
             except Exception:
                 continue
 
-        # Step 3: 标记图片移动 redaction + 收集图片数据
+        # ────────────────────────────────────────────────────────────
+        # 5. 预计算：段落的 original_text、text_changed、position_changed
+        # ────────────────────────────────────────────────────────────
+        para_original_text = {}
+        para_spans_map = {}  # id(p_edit) → 该段落的 span 列表
+        para_changed = {}    # id(p_edit) → (text_changed, position_changed)
+
+        for p_edit in paragraph_edits:
+            old_bbox = fitz.Rect(p_edit["bbox"])
+            spans_in_para = [
+                s for s in current_spans
+                if old_bbox.y0 - 2 <= fitz.Rect(s["bbox"]).y0
+                and fitz.Rect(s["bbox"]).y1 <= old_bbox.y1 + 2
+                and fitz.Rect(s["bbox"]).x0 >= old_bbox.x0 - 2
+            ]
+            para_spans_map[id(p_edit)] = spans_in_para
+
+            if spans_in_para:
+                lines_map = {}
+                for s in spans_in_para:
+                    y_key = round(s["bbox"][1], 0)
+                    lines_map.setdefault(y_key, []).append(s)
+                original = "\n".join(
+                    "".join(sp["text"] for sp in sorted(lst, key=lambda x: x["bbox"][0]))
+                    for lst in (lines_map[y] for y in sorted(lines_map))
+                ).strip()
+            else:
+                original = ""
+            para_original_text[id(p_edit)] = original
+
+            new_text_stripped = p_edit["newText"].strip()
+            new_bbox = p_edit.get("new_bbox")
+            text_changed = new_text_stripped != original
+            position_changed = new_bbox and list(new_bbox) != list(p_edit["bbox"])
+            para_changed[id(p_edit)] = (text_changed, position_changed)
+
+        # ────────────────────────────────────────────────────────────
+        # 6. 收集所有编辑区域 + 标记"故意删除"的 span
+        # ────────────────────────────────────────────────────────────
+        edit_bboxes = []           # 所有要 redact 的区域
+        intentional_span_ids = set()  # (text, origin_x, origin_y) 被故意删除的 span
+
+        # 6a. 段落编辑区域
+        shifted_spans = []
+        shifted_images = []
+        edited_para_bboxes = []
+
+        for p_edit in paragraph_edits:
+            old_bbox = fitz.Rect(p_edit["bbox"])
+            new_bbox = p_edit.get("new_bbox")
+            height_delta = p_edit.get("height_delta", 0)
+            edited_para_bboxes.append(old_bbox)
+            text_changed, position_changed = para_changed[id(p_edit)]
+
+            if text_changed or position_changed:
+                edit_bboxes.append(old_bbox)
+                # 标记段落内的 span 为"故意删除"
+                for s in para_spans_map[id(p_edit)]:
+                    intentional_span_ids.add((s["text"], round(s["origin"][0], 1), round(s["origin"][1], 1)))
+
+                # 段落移动时：new_bbox 区域也需清除，标记该区域内 span 为 intentional
+                if position_changed and new_bbox:
+                    new_rect = fitz.Rect(new_bbox)
+                    edit_bboxes.append(new_rect)
+                    for s in current_spans:
+                        s_bbox = fitz.Rect(s["bbox"])
+                        if s_bbox.intersects(new_rect):
+                            intentional_span_ids.add((s["text"], round(s["origin"][0], 1), round(s["origin"][1], 1)))
+
+            # 下推逻辑：收集需要位移的 span 和图片
+            if height_delta > 2:
+                para_bottom = old_bbox.y1
+                for span in current_spans:
+                    s_bbox = fitz.Rect(span["bbox"])
+                    if s_bbox.y0 >= para_bottom - 1:
+                        in_other_para = any(
+                            pb.y0 - 2 <= s_bbox.y0 and s_bbox.y1 <= pb.y1 + 2
+                            for pb in edited_para_bboxes
+                            if pb != old_bbox
+                        )
+                        if not in_other_para:
+                            edit_bboxes.append(fitz.Rect(s_bbox))
+                            intentional_span_ids.add((span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1)))
+                            shifted_spans.append((span, height_delta))
+                for img_info in current_images_info:
+                    i_bbox = fitz.Rect(img_info.get("bbox", [0, 0, 0, 0]))
+                    if i_bbox.y0 >= para_bottom - 1 and not i_bbox.is_empty:
+                        shifted_images.append((img_info, height_delta))
+
+        # 6b. 图片编辑区域
         moved_images = []
         for img_edit in image_edits:
             try:
                 xref = img_edit["xref"]
                 img_bytes = image_rgba_cache.get(xref)
                 if not img_bytes:
-                    img_bytes = self._extract_image_rgba(page, xref, img_edit["old_bbox"])
+                    continue
                 old_bbox = fitz.Rect(img_edit["old_bbox"])
-                bg = self._detect_bg_color(page, old_bbox)
-                page.add_redact_annot(old_bbox, fill=bg)
+                edit_bboxes.append(old_bbox)
                 moved_images.append({
                     "bytes": img_bytes,
                     "new_bbox": img_edit["new_bbox"],
@@ -715,79 +808,44 @@ class PDFService:
             except Exception:
                 continue
 
-        # Step 4: 标记段落 redaction（span 级别）+ 收集下推内容
-        shifted_spans = []
-        shifted_images = []
-        edited_para_bboxes = []  # 记录已编辑的段落 bbox，下推时跳过
-
-        for p_edit in paragraph_edits:
-            old_bbox = fitz.Rect(p_edit["bbox"])
-            height_delta = p_edit.get("height_delta", 0)
-            edited_para_bboxes.append(old_bbox)
-
-            # 用 span 级别 redaction 代替整段 bbox，保留背景图形（装饰矩形等）
-            spans_found = []
+        # ────────────────────────────────────────────────────────────
+        # 7. 找出"旁观者" span：在编辑区域内但不是被故意删除的
+        #    循环扩散：旁观者的完整 bbox 也加入 edit_bboxes，可能波及新的 span
+        # ────────────────────────────────────────────────────────────
+        bystander_spans = []
+        prev_count = -1
+        while len(bystander_spans) != prev_count:
+            prev_count = len(bystander_spans)
+            bystander_spans = []
             for span in current_spans:
                 s_bbox = fitz.Rect(span["bbox"])
-                # span 在段落范围内
-                if (old_bbox.y0 - 2 <= s_bbox.y0 and
-                        s_bbox.y1 <= old_bbox.y1 + 2 and
-                        s_bbox.x0 >= old_bbox.x0 - 2):
-                    spans_found.append(span)
+                if not any(s_bbox.intersects(eb) for eb in edit_bboxes):
+                    continue
+                sid = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
+                if sid in intentional_span_ids:
+                    continue
+                bystander_spans.append(span)
+            # 把旁观者的完整 bbox 加入编辑区域，供下一轮检测
+            for span in bystander_spans:
+                sb = fitz.Rect(span["bbox"])
+                if not any(sb == eb for eb in edit_bboxes):
+                    edit_bboxes.append(sb)
 
-            if spans_found:
-                for span in spans_found:
-                    s_bbox = fitz.Rect(span["bbox"])
-                    # 与图片重叠的 span 不填充背景色，避免白色矩形盖住水印
-                    overlaps_image = any(
-                        not fitz.Rect(img_info.get("bbox", [0, 0, 0, 0])).is_empty
-                        and s_bbox.intersects(fitz.Rect(img_info.get("bbox", [0, 0, 0, 0])))
-                        for img_info in current_images_info
-                    )
-                    if overlaps_image:
-                        page.add_redact_annot(s_bbox)
-                    else:
-                        bg_s = self._detect_bg_color(page, s_bbox)
-                        page.add_redact_annot(s_bbox, fill=bg_s)
+        # ────────────────────────────────────────────────────────────
+        # 8. Redact 所有编辑区域（整块清除）
+        # ────────────────────────────────────────────────────────────
+        for eb in edit_bboxes:
+            bg = self._detect_bg_color(page, eb)
+            # 白色背景不填充 — PDF 页面本身是白色，无需画白色矩形
+            if all(abs(v - 1.0) < 0.01 for v in bg):
+                page.add_redact_annot(eb)
             else:
-                bg = self._detect_bg_color(page, old_bbox)
-                page.add_redact_annot(old_bbox, fill=bg)
+                page.add_redact_annot(eb, fill=bg)
 
-            if height_delta > 2:
-                para_bottom = old_bbox.y1
-                # 标记下方 span 的 redaction
-                for span in current_spans:
-                    s_bbox = fitz.Rect(span["bbox"])
-                    if s_bbox.y0 >= para_bottom - 1:
-                        # 跳过已在其他编辑段落中的 span
-                        in_other_para = any(
-                            pb.y0 - 2 <= s_bbox.y0 and s_bbox.y1 <= pb.y1 + 2
-                            for pb in edited_para_bboxes
-                            if pb != old_bbox
-                        )
-                        if not in_other_para:
-                            overlaps_image = any(
-                                not fitz.Rect(img_info.get("bbox", [0, 0, 0, 0])).is_empty
-                                and s_bbox.intersects(fitz.Rect(img_info.get("bbox", [0, 0, 0, 0])))
-                                for img_info in current_images_info
-                            )
-                            if overlaps_image:
-                                page.add_redact_annot(s_bbox)
-                            else:
-                                bg_s = self._detect_bg_color(page, s_bbox)
-                                page.add_redact_annot(s_bbox, fill=bg_s)
-                            shifted_spans.append((span, height_delta))
-                # 收集需要位移的图片（不在 redaction 中标记，改用 replace_image 删除）
-                for img_info in current_images_info:
-                    ib = list(img_info.get("bbox", [0, 0, 0, 0]))
-                    i_bbox = fitz.Rect(ib)
-                    if i_bbox.y0 >= para_bottom - 1 and not i_bbox.is_empty:
-                        shifted_images.append((img_info, height_delta))
-
-        # Step 5: 执行 redaction（images=0 不修改图片，防止水印/图片数据被篡改）
+        # 9. 执行 redaction
         page.apply_redactions(images=0)
 
-        # Step 5.5: 删除需要位移的图片（用透明 1x1 像素替换原图片对象）
+        # 10. 删除位移图片（replace_image 清空原图）
         for img_info, _ in shifted_images:
             xref = img_info.get("xref", 0)
             if not xref:
@@ -798,121 +856,94 @@ class PDFService:
             except Exception:
                 pass
 
-        # Step 6: 插入段落新文字（逐行 insert_text）
+        # ────────────────────────────────────────────────────────────
+        # 11. 恢复旁观者文字（被 redaction 误删的相邻文字）
+        # ────────────────────────────────────────────────────────────
+        for span in bystander_spans:
+            self.font_mgr.insert_text_line(page, span["origin"][0], span["origin"][1],
+                                           span["text"], span.get("fontName", ""),
+                                           span.get("fontSize", 12),
+                                           tuple(span.get("color", (0, 0, 0))))
+
+        # 12. 插入段落文字（仅处理有变化的）
         for p_edit in paragraph_edits:
             old_bbox = fitz.Rect(p_edit["bbox"])
-            new_text = p_edit["newText"]
+            new_bbox = p_edit.get("new_bbox")
+            new_text_stripped = p_edit["newText"].strip()
+            text_changed, position_changed = para_changed[id(p_edit)]
+            original_text = para_original_text[id(p_edit)]
+
+            if not position_changed and new_text_stripped == original_text:
+                continue
+
             font_size = p_edit.get("fontSize", 12)
             color = tuple(p_edit.get("color", (0, 0, 0)))
             line_height = p_edit.get("lineHeight", font_size * 1.2)
             original_font = p_edit.get("fontName", "")
+            target_bbox = fitz.Rect(new_bbox) if new_bbox else old_bbox
 
-            # 从原始 span 数据获取精确基线位置
-            first_baseline_y = None
-            for span in current_spans:
-                s_bbox = fitz.Rect(span["bbox"])
-                if (old_bbox.y0 - 1 <= s_bbox.y0 <= old_bbox.y0 + font_size + 1 and
-                        s_bbox.x0 >= old_bbox.x0 - 2):
-                    first_baseline_y = span["origin"][1]
-                    break
-            if first_baseline_y is None:
-                first_baseline_y = old_bbox.y0 + font_size * 0.85
+            if new_bbox:
+                first_baseline_y = new_bbox[1] + font_size * 0.85
+            else:
+                first_baseline_y = None
+                for span in current_spans:
+                    s_bbox = fitz.Rect(span["bbox"])
+                    if (old_bbox.y0 - 1 <= s_bbox.y0 <= old_bbox.y0 + font_size + 1
+                            and s_bbox.x0 >= old_bbox.x0 - 2):
+                        first_baseline_y = span["origin"][1]
+                        break
+                if first_baseline_y is None:
+                    first_baseline_y = old_bbox.y0 + font_size * 0.85
 
-            lines = new_text.split('\n')
-            for i, line in enumerate(lines):
+            for i, line in enumerate(p_edit["newText"].split('\n')):
                 if not line:
                     continue
                 y = first_baseline_y + i * line_height
+                self.font_mgr.insert_text_line(page, target_bbox.x0, y, line,
+                                               original_font, font_size, color)
 
-                # 1) PDF 嵌入字体（fontbuffer）
-                fb = font_cache.get(original_font)
-                if fb:
-                    try:
-                        page.insert_text(
-                            (old_bbox.x0, y), line,
-                            fontname=original_font, fontbuffer=fb,
-                            fontsize=font_size, color=color,
-                        )
-                        continue
-                    except Exception:
-                        pass
-
-                # 2) 系统字体（fontfile）
-                sys_font = _find_system_font(original_font)
-                if sys_font:
-                    try:
-                        page.insert_text(
-                            (old_bbox.x0, y), line,
-                            fontname=original_font, fontfile=sys_font,
-                            fontsize=font_size, color=color,
-                        )
-                        continue
-                    except Exception:
-                        pass
-
-                # 3) 内置字体兜底
-                fn = "china-s" if re.search(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', line) else "helv"
-                page.insert_text(
-                    (old_bbox.x0, y), line,
-                    fontname=fn, fontsize=font_size, color=color,
-                )
-
-        # Step 7: 插入下推后的文字
+        # 13. 插入位移文字
         for span, delta in shifted_spans:
-            new_origin_y = span["origin"][1] + delta
-            text = span["text"]
-
-            # 同样三级字体回退
+            new_y = span["origin"][1] + delta
             orig_fn = span.get("fontName", "")
-            fb = font_cache.get(orig_fn)
-            if fb:
-                try:
-                    page.insert_text(
-                        (span["origin"][0], new_origin_y), text,
-                        fontname=orig_fn, fontbuffer=fb,
-                        fontsize=span["fontSize"], color=tuple(span["color"]),
-                    )
-                    continue
-                except Exception:
-                    pass
+            self.font_mgr.insert_text_line(page, span["bbox"][0], new_y, span["text"],
+                                           orig_fn, span["fontSize"], tuple(span["color"]))
 
-            sys_font = _find_system_font(orig_fn)
-            if sys_font:
-                try:
-                    page.insert_text(
-                        (span["origin"][0], new_origin_y), text,
-                        fontname=orig_fn, fontfile=sys_font,
-                        fontsize=span["fontSize"], color=tuple(span["color"]),
-                    )
-                    continue
-                except Exception:
-                    pass
+        # 14. 插入移动图片
+        for moved in moved_images:
+            page.insert_image(fitz.Rect(moved["new_bbox"]), stream=moved["bytes"],
+                              keep_proportion=True)
 
-            fn = "china-s" if re.search(r'[\u4e00-\u9fff]', text) else "helv"
-            page.insert_text(
-                (span["origin"][0], new_origin_y), text,
-                fontname=fn, fontsize=span["fontSize"], color=tuple(span["color"]),
-            )
-
-        # Step 8: 插入下推后的图片（使用预提取的 RGBA PNG）
+        # 15. 插入位移图片
         for img_info, delta in shifted_images:
             xref = img_info.get("xref", 0)
-            if not xref:
-                continue
             img_bytes = image_rgba_cache.get(xref)
             if not img_bytes:
                 continue
-            ib = list(img_info.get("bbox", [0, 0, 0, 0]))
-            old_r = fitz.Rect(ib)
-            new_r = fitz.Rect(old_r.x0, old_r.y0 + delta, old_r.x1, old_r.y1 + delta)
-            page.insert_image(new_r, stream=img_bytes, keep_proportion=True)
+            old_ib = fitz.Rect(img_info.get("bbox", [0, 0, 0, 0]))
+            new_rect = fitz.Rect(old_ib.x0, old_ib.y0 + delta, old_ib.x1, old_ib.y1 + delta)
+            page.insert_image(new_rect, stream=img_bytes, keep_proportion=True)
 
-        # Step 9: 插入移动后的图片
-        for moved in moved_images:
-            new_rect = fitz.Rect(moved["new_bbox"])
-            page.insert_image(new_rect, stream=moved["bytes"], keep_proportion=True)
+        # 16. 插入移动绘图
+        for md in moved_drawings:
+            fill_color = md["fill"]
+            if fill_color:
+                shape = page.new_shape()
+                shape.draw_rect(fitz.Rect(md["new_bbox"]))
+                shape.finish(fill=fill_color, color=md["stroke"])
+                shape.commit()
 
-        # Step 10: 重新渲染并提取更新数据
+    def modify_page(self, page_num: int, paragraph_edits: List[Dict], image_edits: List[Dict] = None, dpi: int = 150) -> Dict:
+        """修改页面并返回渲染结果（实时预览用）"""
+        if image_edits is None:
+            image_edits = []
+
+        if page_num < 0 or page_num >= len(self.doc):
+            raise ValueError(f"Page {page_num} out of range")
+
+        page = self.doc[page_num]
+        self._apply_all_edits(page, self.doc, paragraph_edits, image_edits, [])
+
         image_path = self.render_page_to_file(page_num, dpi)
         image_url = f"/renders/{Path(image_path).name}"
         paragraphs = self.get_page_text(page_num)
@@ -926,10 +957,83 @@ class PDFService:
             "drawings": drawings,
         }
 
+    def apply_all_pages_edits(self, pages_edits: dict) -> str:
+        """多页统一导出：复制 doc，逐页应用编辑，导出。
+
+        pages_edits: { "0": {paragraph_edits, image_edits, drawing_edits}, ... }
+        """
+        import io
+        buf = io.BytesIO()
+        self.doc.save(buf)
+        buf.seek(0)
+
+        tmp_path = OUTPUT_DIR / f"{self.file_id}_tmp_all.pdf"
+        with open(tmp_path, 'wb') as f:
+            f.write(buf.read())
+
+        tmp_doc = fitz.open(str(tmp_path))
+
+        for page_num_str, edits in pages_edits.items():
+            page_num = int(page_num_str)
+            if page_num < 0 or page_num >= len(tmp_doc):
+                continue
+            para_edits = edits.get("paragraph_edits", [])
+            img_edits = edits.get("image_edits", [])
+            draw_edits = edits.get("drawing_edits", [])
+            if not para_edits and not img_edits and not draw_edits:
+                continue
+            page = tmp_doc[page_num]
+            self._apply_all_edits(page, tmp_doc, para_edits, img_edits, draw_edits)
+
+        output_path = OUTPUT_DIR / f"{self.file_id}_edited.pdf"
+        self.font_mgr.save_with_subset(tmp_doc, str(output_path))
+        tmp_doc.close()
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return str(output_path)
+
     def export_pdf(self) -> str:
         """导出修改后的 PDF，返回文件路径"""
         output_path = OUTPUT_DIR / f"{self.file_id}_edited.pdf"
         self.doc.save(str(output_path))
+        return str(output_path)
+
+    def apply_edits_and_export(self, page_num: int, paragraph_edits: List[Dict], image_edits: List[Dict], drawing_edits: List[Dict] = None) -> str:
+        """一次性应用所有编辑并导出 PDF
+
+        复制 doc 副本进行修改，不影响内存中的原始 doc（支持多次导出）。
+        """
+        if drawing_edits is None:
+            drawing_edits = []
+
+        if page_num < 0 or page_num >= len(self.doc):
+            raise ValueError(f"Page {page_num} out of range")
+
+        # 复制 doc，在副本上操作
+        import io
+        buf = io.BytesIO()
+        self.doc.save(buf)
+        buf.seek(0)
+
+        tmp_path = OUTPUT_DIR / f"{self.file_id}_tmp.pdf"
+        with open(tmp_path, 'wb') as f:
+            f.write(buf.read())
+
+        tmp_doc = fitz.open(str(tmp_path))
+        page = tmp_doc[page_num]
+
+        self._apply_all_edits(page, tmp_doc, paragraph_edits, image_edits, drawing_edits)
+
+        # 导出（子集化字体 + 压缩保存）
+        output_path = OUTPUT_DIR / f"{self.file_id}_edited.pdf"
+        self.font_mgr.save_with_subset(tmp_doc, str(output_path))
+        tmp_doc.close()
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         return str(output_path)
 
     def close(self):
