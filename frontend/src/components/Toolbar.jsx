@@ -56,7 +56,7 @@ function Toolbar({
   }
 
   const isNewElement = selectionSnapshot?._newElement;
-  const isText = selectionSnapshot?.type === 'textbox' || selectionSnapshot?.type === 'i-text';
+  const isText = selectionSnapshot?.type === 'textbox' || selectionSnapshot?.type === 'i-text' || selectionSnapshot?.type === 'PdfText';
   const isImage = selectionSnapshot?.type === 'image';
 
   if (isText) {

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import FileUpload from './FileUpload';
-import PageCanvas from './PageCanvas';
+import FabricCanvas from './FabricCanvas';
 import PageSidebar from './PageSidebar';
 import Toolbar from './Toolbar';
 import { uploadPDF, exportAllPages, getFonts, uploadImage } from '../services/api';
@@ -144,28 +144,34 @@ function PDFViewer() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [pageCount, handleUndo, handleRedo, scrollToPage]);
 
+  const _buildSnapshot = (obj) => {
+    const isPdfText = obj.type === 'PdfText';
+    return {
+      type: obj.type,
+      text: isPdfText ? obj.getText() : obj.text,
+      fontSize: obj.fontSize,
+      fontFamily: obj.fontFamily,
+      fontWeight: obj.fontWeight,
+      fontStyle: obj.fontStyle,
+      fill: isPdfText ? obj.color : obj.fill,
+      textAlign: obj.textAlign,
+      opacity: obj.opacity,
+      scaleX: obj.scaleX,
+      scaleY: obj.scaleY,
+      angle: obj.angle,
+      width: obj.width,
+      _newElement: obj._pdfData?.isNew || obj._newElement,
+      _elementType: obj._elementType,
+      _elementProps: obj._elementProps ? { ...obj._elementProps } : null,
+      _originalFontName: obj._pdfData?.originalFontName || null,
+    };
+  };
+
   const handleSelectionChange = useCallback((obj, canvas) => {
     selectedObjRef.current = obj;
     activeCanvasRef.current = canvas;
     if (obj) {
-      setSelectionSnapshot({
-        type: obj.type,
-        text: obj.text,
-        fontSize: obj.fontSize,
-        fontFamily: obj.fontFamily,
-        fontWeight: obj.fontWeight,
-        fontStyle: obj.fontStyle,
-        fill: obj.fill,
-        textAlign: obj.textAlign,
-        opacity: obj.opacity,
-        scaleX: obj.scaleX,
-        scaleY: obj.scaleY,
-        angle: obj.angle,
-        _newElement: obj._newElement,
-        _elementType: obj._elementType,
-        _elementProps: obj._elementProps ? { ...obj._elementProps } : null,
-        _originalFontName: obj._pdfData?.originalFontName || null,
-      });
+      setSelectionSnapshot(_buildSnapshot(obj));
     } else {
       setSelectionSnapshot(null);
     }
@@ -216,53 +222,29 @@ function PDFViewer() {
     const canvas = activeCanvasRef.current;
     if (!obj || !canvas) return;
 
-    if (prop === 'fontFamily') {
-      obj.set('fontFamily', `${value}, Arial, sans-serif`);
-      if (obj._elementProps) {
-        obj._elementProps = { ...obj._elementProps, fontFamily: value };
+    if (obj.updateProperty) {
+      // PdfTextObject — handles DOM sync internally
+      obj.updateProperty(prop, value);
+    } else {
+      if (prop === 'fontFamily') {
+        obj.set('fontFamily', `${value}, Arial, sans-serif`);
+        if (obj._elementProps) {
+          obj._elementProps = { ...obj._elementProps, fontFamily: value };
+        }
+      } else if (prop === 'fontSize') {
+        obj.set('fontSize', value);
+        if (obj._elementProps) {
+          obj._elementProps = { ...obj._elementProps, fontSize: value };
+        }
+      } else {
+        obj.set(prop, value);
       }
-    } else if (prop === 'fontSize') {
-      obj.set('fontSize', value);
-      if (obj._elementProps) {
-        obj._elementProps = { ...obj._elementProps, fontSize: value };
-      }
-    } else if (prop === 'fontWeight') {
-      obj.set('fontWeight', value);
-    } else if (prop === 'fontStyle') {
-      obj.set('fontStyle', value);
-    } else if (prop === 'fill') {
-      obj.set('fill', value);
-    } else if (prop === 'textAlign') {
-      obj.set('textAlign', value);
-    } else if (prop === 'scaleX') {
-      obj.set('scaleX', value);
-    } else if (prop === 'scaleY') {
-      obj.set('scaleY', value);
-    } else if (prop === 'opacity') {
-      obj.set('opacity', value);
-    } else if (prop === 'angle') {
-      obj.set('angle', value);
     }
 
+    if (obj._pdfData) obj._pdfData._edited = true;
+
     canvas.requestRenderAll();
-    setSelectionSnapshot({
-      type: obj.type,
-      text: obj.text,
-      fontSize: obj.fontSize,
-      fontFamily: obj.fontFamily,
-      fontWeight: obj.fontWeight,
-      fontStyle: obj.fontStyle,
-      fill: obj.fill,
-      textAlign: obj.textAlign,
-      opacity: obj.opacity,
-      scaleX: obj.scaleX,
-      scaleY: obj.scaleY,
-      angle: obj.angle,
-      _newElement: obj._newElement,
-      _elementType: obj._elementType,
-      _elementProps: obj._elementProps ? { ...obj._elementProps } : null,
-      _originalFontName: obj._pdfData?.originalFontName || null,
-    });
+    setSelectionSnapshot(_buildSnapshot(obj));
   }, []);
 
   const handleExport = async () => {
@@ -394,13 +376,14 @@ function PDFViewer() {
         >
           {pageSizes.map((size, i) => (
             <div key={i} className="flex justify-center">
-              <PageCanvas
+              <FabricCanvas
                 ref={el => { if (el) pageRefs.current[i] = el; }}
                 fileId={fileId}
                 pageNum={i}
                 pageWidth={size.width}
                 pageHeight={size.height}
                 onSelectionChange={handleSelectionChange}
+                hideBackground
               />
             </div>
           ))}

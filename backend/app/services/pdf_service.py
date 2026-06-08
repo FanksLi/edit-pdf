@@ -92,7 +92,7 @@ class PDFService:
                 first = spans[0]
                 color_int = first.get("color", 0)
                 flat_lines.append({
-                    "text": "".join(s["text"] for s in spans),
+                    "text": "".join(s["text"] for s in spans).strip(),
                     "y0": first["bbox"][1],
                     "fontSize": self._dominant_font_size(spans),
                     "fontName": first["font"],
@@ -141,11 +141,13 @@ class PDFService:
             prev_line = flat_lines[i]
             curr_line = flat_lines[i + 1]
 
-            # 信号 0: 水平不重叠 — 当前行起点在下一行终点右侧
-            no_horizontal_overlap = curr_line["x0"] >= prev_line["x1"]
+            # 信号 0: 水平不重叠 — 当前行与前一行无 x 轴交集（左或右均可）
+            no_horizontal_overlap = (curr_line["x0"] >= prev_line["x1"]
+                                     or curr_line["x1"] <= prev_line["x0"])
 
-            # 信号 1: 字号突变（>2pt）
-            font_size_changed = abs(curr_line["fontSize"] - prev_line["fontSize"]) > 2
+            # 信号 1: 字号突变（>10% 或 >1.5pt，取较小值）
+            fs_diff = abs(curr_line["fontSize"] - prev_line["fontSize"])
+            font_size_changed = fs_diff > min(prev_line["fontSize"] * 0.1, 1.5)
 
             # 跳过异常小 gap（标题内部重叠等）
             if gap < flat_lines[i]["fontSize"] * 0.5:
@@ -194,7 +196,7 @@ class PDFService:
 
         result = []
         for group in para_groups:
-            text = "\n".join(l["text"] for l in group)
+            text = "\n".join(l["text"].rstrip() for l in group).strip()
 
             all_bb = [bb for l in group for bb in l["spans_bboxes"]]
             x0 = min(b[0] for b in all_bb)
@@ -226,6 +228,55 @@ class PDFService:
 
         return result
 
+    def _detect_cell_alignment(self, paragraphs: list, drawings: list) -> list:
+        """检测段落文字在表格 cell 中的对齐方式。
+
+        对每个段落，找到包含它的最小绘图矩形（cell 边界），
+        根据 text 相对 cell 的位置判断 left/center/right。
+        """
+        cell_rects = []
+        for d in drawings:
+            r = d["rect"]
+            w, h = r[2] - r[0], r[3] - r[1]
+            if w < 5 or h < 5:
+                continue
+            cell_rects.append(r)
+
+        for para in paragraphs:
+            px0, py0, px1, py1 = para["bbox"]
+            pw = px1 - px0
+            ph = py1 - py0
+
+            best_cell = None
+            best_area = float('inf')
+
+            for cr in cell_rects:
+                cx0, cy0, cx1, cy1 = cr
+                if cx0 <= px0 and cy0 <= py0 and cx1 >= px1 and cy1 >= py1:
+                    area = (cx1 - cx0) * (cy1 - cy0)
+                    if area < best_area:
+                        best_area = area
+                        best_cell = cr
+
+            if best_cell:
+                cx0, cy0, cx1, cy1 = best_cell
+                cw = cx1 - cx0
+                margin = para["fontSize"] * 1.0
+
+                text_center = px0 + pw / 2
+                cell_center = cx0 + cw / 2
+
+                if abs(text_center - cell_center) < margin and pw < cw * 0.9:
+                    para["textAlign"] = "center"
+                elif abs(px1 - cx1) < margin and pw < cw * 0.9:
+                    para["textAlign"] = "right"
+                else:
+                    para["textAlign"] = "left"
+            else:
+                para["textAlign"] = "left"
+
+        return paragraphs
+
     def get_page_text(self, page_num: int) -> List[Dict[str, Any]]:
         """提取页面文字，按行间距比值自动分段"""
         if page_num < 0 or page_num >= len(self.doc):
@@ -233,7 +284,10 @@ class PDFService:
 
         page = self.doc[page_num]
         blocks = page.get_text("dict")["blocks"]
-        return self._gap_based_paragraphs(blocks)
+        paragraphs = self._gap_based_paragraphs(blocks)
+
+        drawings = self.get_page_drawings(page_num)
+        return self._detect_cell_alignment(paragraphs, drawings)
 
     def get_page_drawings(self, page_num: int) -> List[Dict[str, Any]]:
         """提取页面绘图元素（矩形、线条等），带 z_index
@@ -901,8 +955,16 @@ class PDFService:
                 if not line:
                     continue
                 y = first_baseline_y + i * line_height
-                self.font_mgr.insert_text_line(page, target_bbox.x0, y, line,
-                                               original_font, font_size, color)
+                text_align = p_edit.get("textAlign", "left")
+                if text_align == "left" or target_bbox.width < 5:
+                    self.font_mgr.insert_text_line(page, target_bbox.x0, y, line,
+                                                   original_font, font_size, color)
+                else:
+                    rect = fitz.Rect(target_bbox.x0, y - font_size, target_bbox.x1, y + font_size * 0.5)
+                    align = 1 if text_align == "center" else 2
+                    self.font_mgr.insert_textbox(page, rect, line,
+                                                 font_name=original_font,
+                                                 font_size=font_size, color=color, align=align)
 
         # 13. 插入位移文字
         for span, delta in shifted_spans:

@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import pdf
-from app.config import RENDER_DIR, IMAGE_DIR
+from app.routers import pdf, convert
+from app.config import RENDER_DIR, IMAGE_DIR, LOCAL_FONT_DIR
 
 app = FastAPI(
     title="PDF 文字编辑系统",
@@ -25,9 +25,11 @@ app.add_middleware(
 # 静态文件服务 - 渲染图片
 app.mount("/renders", StaticFiles(directory=str(RENDER_DIR)), name="renders")
 app.mount("/images", StaticFiles(directory=str(IMAGE_DIR)), name="images")
+app.mount("/fonts", StaticFiles(directory=str(LOCAL_FONT_DIR)), name="fonts")
 
 # 注册路由
 app.include_router(pdf.router)
+app.include_router(convert.router)
 
 
 @app.get("/")

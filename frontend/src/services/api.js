@@ -93,6 +93,23 @@ export async function getFonts() {
 /**
  * 上传图片
  */
+/**
+ * PDF 转换为办公文档
+ */
+export async function convertPDF(file, targetFormat) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`/api/convert/?target_format=${targetFormat}`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Conversion failed' }));
+    throw new Error(error.detail || 'Conversion failed');
+  }
+  return res.blob();
+}
+
 export async function uploadImage(fileId, file) {
   const formData = new FormData();
   formData.append('file', file);

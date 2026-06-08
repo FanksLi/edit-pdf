@@ -62,3 +62,4 @@ Thumbs.db
 *.pdf
 !test.pdf  # 保留测试 PDF
 .gstack/
+tests
