@@ -25,10 +25,14 @@ class PdfTextObject extends Rect {
       borderDashArray: [4, 4],
       padding: 4,
       strokeUniform: true,
+      lockRotation: true,       // 锁定旋转
       ...options,
       left: centerLeft,
       top: centerTop,
     });
+
+    // 删除旋转控制点
+    delete this.controls.mtr;
     this.text = options.text || '';
     this.fontSize = options.fontSize || 16;
     this.fontFamily = options.fontFamily || 'Arial';
@@ -110,15 +114,22 @@ class PdfTextObject extends Rect {
     if (el) {
       this.text = el.innerText || '';
       el.style.pointerEvents = 'none';
-      el.style.overflow = 'hidden';
+      el.style.overflow = 'visible';
       el.style.background = 'transparent';
       el.contentEditable = 'false';
+      // Update height to match actual content, keeping top edge fixed
+      const scrollH = el.scrollHeight;
+      if (scrollH !== this.height) {
+        // 高度变化时，调整 top 保持顶部边缘固定
+        // 因为 originY 是 center，top 是中心点坐标
+        // 新的中心点 = 原中心点 + (新高度 - 原高度) / 2
+        const heightDelta = scrollH - this.height;
+        this.set('height', scrollH);
+        this.set('top', this.top + heightDelta / 2);
+        this.setCoords();
+      }
     }
-    // Restore original height
-    if (this._originalHeight != null) {
-      this.set('height', this._originalHeight);
-      delete this._originalHeight;
-    }
+    delete this._originalHeight;
     this.syncToDOM();
   }
 
@@ -161,7 +172,32 @@ class PdfTextObject extends Rect {
         break;
       case 'fontSize':
         this.fontSize = value;
-        if (el) el.style.fontSize = `${value}px`;
+        if (el) {
+          el.style.fontSize = `${value}px`;
+          // Remove fixed dimensions temporarily to measure actual content size
+          const savedWidth = el.style.width;
+          const savedHeight = el.style.height;
+          el.style.width = 'auto';
+          el.style.height = 'auto';
+          el.style.whiteSpace = 'nowrap';
+
+          // Wait for DOM to update then adjust width and height
+          requestAnimationFrame(() => {
+            const actualW = el.offsetWidth;
+            const actualH = el.offsetHeight;
+            // Restore dimensions with new values
+            el.style.width = `${actualW}px`;
+            el.style.height = `${actualH}px`;
+            el.style.whiteSpace = 'pre';
+
+            if (actualW > 0 && actualH > 0) {
+              this.set({ width: actualW, height: actualH });
+              this.syncToDOM(); // Sync DOM position after size change
+              this.setCoords();
+              this.canvas?.requestRenderAll();
+            }
+          });
+        }
         break;
       case 'fontWeight':
         this.fontWeight = value;
@@ -188,6 +224,8 @@ class PdfTextObject extends Rect {
         this.syncToDOM();
         break;
     }
+    this.setCoords();
+    this.canvas?.requestRenderAll();
   }
 
   destroy() {

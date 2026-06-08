@@ -16,13 +16,17 @@ class TextSpan(BaseModel):
 
 class Paragraph(BaseModel):
     """段落数据 — 多行文字组成的编辑单元"""
+    id: Optional[str] = None
     text: str
     bbox: Tuple[float, float, float, float]
     fontSize: float
     fontName: str
     color: Tuple[float, float, float]
     lineHeight: float
+    textAlign: str = "left"
     z_index: int = 0
+    tableId: Optional[str] = None
+    cellId: Optional[str] = None
 
 
 class EditItem(BaseModel):
@@ -84,12 +88,35 @@ class DrawingBlock(BaseModel):
     fill: Optional[Tuple[float, float, float]] = None  # RGB (0-1)
     stroke: Optional[Tuple[float, float, float]] = None  # RGB (0-1)
     z_index: int = 0
+    tableId: Optional[str] = None  # 所属表格ID（如果属于表格）
+
+
+class TableCell(BaseModel):
+    """表格单元格"""
+    id: str
+    rect: Tuple[float, float, float, float]
+    paragraph_ids: List[str] = []
+    fill: Optional[Tuple[float, float, float]] = None
+    stroke: Optional[Tuple[float, float, float]] = None
+
+
+class TableRow(BaseModel):
+    """表格行"""
+    cells: List[TableCell]
+
+
+class Table(BaseModel):
+    """表格结构"""
+    id: str
+    bbox: Tuple[float, float, float, float]
+    rows: List[TableRow]
 
 
 class PageContentResponse(BaseModel):
-    """页面内容响应 - 绘图 + 段落 + 图片（按 z_index 排列）"""
+    """页面内容响应 - 绘图 + 段落 + 图片 + 表格（按 z_index 排列）"""
     page_width: float
     page_height: float
+    tables: List[Table] = []
     drawings: List[DrawingBlock] = []
     paragraphs: List[Paragraph]
     images: List[ImageBlock]

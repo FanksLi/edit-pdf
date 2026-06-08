@@ -354,38 +354,167 @@ class PDFService:
         }
 
     def _detect_tables(self, drawings):
-        """从 drawings 中识别表格结构"""
-        # 过滤有效矩形
-        valid_drawings = [
-            d for d in drawings
-            if d["rect"][2] - d["rect"][0] > 5 and d["rect"][3] - d["rect"][1] > 5
-        ]
+        """从 drawings 中识别表格结构
 
-        if len(valid_drawings) < 4:
-            return []
+        支持两种表格类型：
+        1. 填充矩形组成的表格（多个带 fill 的矩形）
+        2. 线条绘制的表格（用 stroke 线条围成的区域）
+        """
+        # 分离填充矩形和线条
+        filled_rects = []
+        lines = []
 
-        # 聚类
-        groups = self._cluster_adjacent_rects(valid_drawings, gap_threshold=10)
+        for d in drawings:
+            rect = d["rect"]
+            # rect 可能是列表 [x0, y0, x1, y1] 或 fitz.Rect
+            if isinstance(rect, (list, tuple)):
+                x0, y0, x1, y1 = rect
+            else:
+                x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+            w, h = x1 - x0, y1 - y0
+
+            # 填充矩形
+            if d.get("fill"):
+                if w > 5 and h > 5:
+                    filled_rects.append(d)
+            # 线条（宽度或高度很小的矩形）
+            elif d.get("stroke"):
+                # 水平线（高度很小）
+                if w > 10 and h < 2:
+                    lines.append({**d, "type": "h_line", "y": (y0 + y1) / 2})
+                # 垂直线（宽度很小）
+                elif h > 10 and w < 2:
+                    lines.append({**d, "type": "v_line", "x": (x0 + x1) / 2})
 
         tables = []
-        for group_idx, group in enumerate(groups):
-            # 校验：至少 4 个矩形
-            if len(group) < 4:
-                continue
 
-            # 网格化
-            rows, cols = self._group_rows_cols(group)
+        # 方式1: 用填充矩形检测表格
+        if len(filled_rects) >= 2:
+            groups = self._cluster_adjacent_rects(filled_rects, gap_threshold=10)
+            for group_idx, group in enumerate(groups):
+                if len(group) < 2:
+                    continue
 
-            # 校验：至少 2 行 2 列
-            if len(rows) < 2 or len(cols) < 2:
-                continue
+                rows, cols = self._group_rows_cols(group)
+                if len(rows) >= 1 and len(cols) >= 1:
+                    table_id = f"table-{group_idx}"
+                    table = self._build_table_structure(group, rows, cols, table_id)
+                    tables.append(table)
 
-            # 构建表格结构
-            table_id = f"table-{group_idx}"
-            table = self._build_table_structure(group, rows, cols, table_id)
-            tables.append(table)
+        # 方式2: 用线条检测表格（至少2条水平线+2条垂直线形成密集网格）
+        h_lines = sorted([l for l in lines if l["type"] == "h_line"], key=lambda l: l["y"])
+        v_lines = sorted([l for l in lines if l["type"] == "v_line"], key=lambda l: l["x"])
+
+        if len(h_lines) >= 2 and len(v_lines) >= 2:
+            # 找出形成密集网格的线条组（垂直线间距相近）
+            table_bounds = self._detect_line_table_bounds(h_lines, v_lines)
+            for bounds in table_bounds:
+                table = self._build_table_from_lines(bounds, h_lines, v_lines, filled_rects, f"table-line-{len(tables)}")
+                if table:
+                    tables.append(table)
 
         return tables
+
+    def _detect_line_table_bounds(self, h_lines, v_lines):
+        """检测线条形成的表格边界
+
+        只检测垂直线间距相近的区域（表格的列间距应该是均匀的）
+        """
+        bounds = []
+
+        # 按Y坐标分组水平线，找密集区域
+        h_groups = []
+        current_group = [h_lines[0]]
+        for l in h_lines[1:]:
+            if abs(l["y"] - current_group[-1]["y"]) < 50:  # 同一表格内的行间距不超过50
+                current_group.append(l)
+            else:
+                if len(current_group) >= 2:
+                    h_groups.append(current_group)
+                current_group = [l]
+        if len(current_group) >= 2:
+            h_groups.append(current_group)
+
+        # 对每个水平线组，找对应的垂直线
+        for h_group in h_groups:
+            y0 = min(l["rect"][1] for l in h_group)
+            y1 = max(l["rect"][3] for l in h_group)
+
+            # 找出跨越这个Y范围的垂直线
+            matched_v = []
+            for v in v_lines:
+                v_y0, v_y1 = v["rect"][1], v["rect"][3]
+                # 垂直线应该覆盖整个Y范围
+                if v_y0 <= y0 + 5 and v_y1 >= y1 - 5:
+                    matched_v.append(v)
+
+            if len(matched_v) >= 2:
+                x0 = min(l["rect"][0] for l in matched_v)
+                x1 = max(l["rect"][2] for l in matched_v)
+                bounds.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "h_lines": h_group, "v_lines": matched_v})
+
+        return bounds
+
+    def _build_table_from_lines(self, bounds, h_lines, v_lines, filled_rects, table_id):
+        """从线条和填充矩形构建表格结构"""
+        x0, y0, x1, y1 = bounds["x0"], bounds["y0"], bounds["x1"], bounds["y1"]
+
+        # 使用 bounds 中已筛选的线条
+        h_in_bounds = bounds.get("h_lines", h_lines)
+        v_in_bounds = bounds.get("v_lines", v_lines)
+
+        # 找出表格内的水平线（y坐标）
+        row_ys = sorted(set(l["y"] for l in h_in_bounds))
+        # 找出表格内的垂直线（x坐标）
+        col_xs = sorted(set(l["x"] for l in v_in_bounds))
+
+        if len(row_ys) < 1 or len(col_xs) < 1:
+            return None
+
+        # 添加边界
+        all_ys = [y0] + row_ys + [y1]
+        all_xs = [x0] + col_xs + [x1]
+
+        rows = []
+        for row_idx in range(len(all_ys) - 1):
+            cells = []
+            for col_idx in range(len(all_xs) - 1):
+                cell_x0, cell_y0 = all_xs[col_idx], all_ys[row_idx]
+                cell_x1, cell_y1 = all_xs[col_idx + 1], all_ys[row_idx + 1]
+
+                # 查找该单元格的填充颜色
+                cell_fill = None
+                for fr in filled_rects:
+                    fr_rect = fr["rect"]
+                    if isinstance(fr_rect, (list, tuple)):
+                        fr_x0, fr_y0, fr_x1, fr_y1 = fr_rect
+                    else:
+                        fr_x0, fr_y0, fr_x1, fr_y1 = fr_rect.x0, fr_rect.y0, fr_rect.x1, fr_rect.y1
+                    if (fr_x0 <= cell_x0 + 1 and fr_y0 <= cell_y0 + 1 and
+                        fr_x1 >= cell_x1 - 1 and fr_y1 >= cell_y1 - 1):
+                        cell_fill = fr.get("fill")
+                        break
+
+                cell_id = f"{table_id}-cell-{row_idx}-{col_idx}"
+                cells.append({
+                    "id": cell_id,
+                    "rect": [cell_x0, cell_y0, cell_x1, cell_y1],
+                    "fill": cell_fill,
+                    "stroke": None,
+                    "paragraph_ids": [],
+                })
+
+            if cells:
+                rows.append({"cells": cells})
+
+        if not rows:
+            return None
+
+        return {
+            "id": table_id,
+            "bbox": [x0, y0, x1, y1],
+            "rows": rows,
+        }
 
     def _assign_paragraphs_to_cells(self, paragraphs, tables):
         """将段落分配到对应的 cell"""
@@ -481,16 +610,19 @@ class PDFService:
         # 检测对齐方式（使用新的 cell 信息）
         paragraphs = self._detect_cell_alignment(paragraphs, drawings)
 
-        # 过滤掉属于表格的 drawings
-        table_rects = set()
+        # 过滤掉属于表格的填充矩形（单元格背景），但保留线条
+        table_fill_rects = set()
         for table in tables:
             for row in table["rows"]:
                 for cell in row["cells"]:
-                    table_rects.add(tuple(cell["rect"]))
+                    table_fill_rects.add(tuple(cell["rect"]))
 
         non_table_drawings = [
             d for d in drawings
-            if tuple(d["rect"]) not in table_rects
+            # 保留所有线条（有 stroke 没有 fill 的元素）
+            if (d.get("stroke") and not d.get("fill")) or
+               # 只过滤掉表格填充矩形
+               (d.get("fill") and tuple(d["rect"]) not in table_fill_rects)
         ]
 
         return {
@@ -583,12 +715,19 @@ class PDFService:
         result = []
         for idx, d in enumerate(drawings):
             rect = d["rect"]
-            if rect.is_empty or rect.width < 0.5 or rect.height < 0.5:
-                continue
+            # 保留线条（宽度或高度为0但有stroke的元素）
+            # 注意：PyMuPDF 中线条的 is_empty 返回 True，但我们需要保留它们
+            is_line = rect.width < 1 or rect.height < 1
 
             fill = d.get("fill")
             stroke = d.get("color")
+
+            # 跳过既没有填充也没有边框的元素
             if not fill and not stroke:
+                continue
+
+            # 非线条元素需要最小尺寸
+            if not is_line and (rect.width < 0.5 or rect.height < 0.5):
                 continue
 
             if idx < len(drawing_xrefs):
@@ -1000,9 +1139,21 @@ class PDFService:
 
             new_text_stripped = p_edit["newText"].strip()
             new_bbox = p_edit.get("new_bbox")
+            new_font_size = p_edit.get("fontSize", 12)
+            original_font_size = p_edit.get("originalFontSize", new_font_size)
+
             text_changed = new_text_stripped != original
             position_changed = new_bbox and list(new_bbox) != list(p_edit["bbox"])
-            para_changed[id(p_edit)] = (text_changed, position_changed)
+            font_size_changed = abs(new_font_size - original_font_size) > 0.1
+
+            # Check color change
+            new_color = p_edit.get("color")
+            color_changed = False
+            if new_color and "originalColor" in p_edit:
+                original_color = p_edit["originalColor"]
+                color_changed = any(abs(new_color[i] - original_color[i]) > 0.01 for i in range(3))
+
+            para_changed[id(p_edit)] = (text_changed or font_size_changed or color_changed, position_changed)
 
         # ────────────────────────────────────────────────────────────
         # 6. 收集所有编辑区域 + 标记"故意删除"的 span
@@ -1037,25 +1188,25 @@ class PDFService:
                         if s_bbox.intersects(new_rect):
                             intentional_span_ids.add((s["text"], round(s["origin"][0], 1), round(s["origin"][1], 1)))
 
-            # 下推逻辑：收集需要位移的 span 和图片
-            if height_delta > 2:
-                para_bottom = old_bbox.y1
-                for span in current_spans:
-                    s_bbox = fitz.Rect(span["bbox"])
-                    if s_bbox.y0 >= para_bottom - 1:
-                        in_other_para = any(
-                            pb.y0 - 2 <= s_bbox.y0 and s_bbox.y1 <= pb.y1 + 2
-                            for pb in edited_para_bboxes
-                            if pb != old_bbox
-                        )
-                        if not in_other_para:
-                            edit_bboxes.append(fitz.Rect(s_bbox))
-                            intentional_span_ids.add((span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1)))
-                            shifted_spans.append((span, height_delta))
-                for img_info in current_images_info:
-                    i_bbox = fitz.Rect(img_info.get("bbox", [0, 0, 0, 0]))
-                    if i_bbox.y0 >= para_bottom - 1 and not i_bbox.is_empty:
-                        shifted_images.append((img_info, height_delta))
+            # 下推逻辑已禁用 - 不再自动移动下方内容
+            # if height_delta > 2:
+            #     para_bottom = old_bbox.y1
+            #     for span in current_spans:
+            #         s_bbox = fitz.Rect(span["bbox"])
+            #         if s_bbox.y0 >= para_bottom - 1:
+            #             in_other_para = any(
+            #                 pb.y0 - 2 <= s_bbox.y0 and s_bbox.y1 <= pb.y1 + 2
+            #                 for pb in edited_para_bboxes
+            #                 if pb != old_bbox
+            #             )
+            #             if not in_other_para:
+            #                 edit_bboxes.append(fitz.Rect(s_bbox))
+            #                 intentional_span_ids.add((span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1)))
+            #                 shifted_spans.append((span, height_delta))
+            #     for img_info in current_images_info:
+            #         i_bbox = fitz.Rect(img_info.get("bbox", [0, 0, 0, 0]))
+            #         if i_bbox.y0 >= para_bottom - 1 and not i_bbox.is_empty:
+            #             shifted_images.append((img_info, height_delta))
 
         # 6b. 图片编辑区域
         moved_images = []
@@ -1144,8 +1295,20 @@ class PDFService:
                 continue
 
             font_size = p_edit.get("fontSize", 12)
+            original_font_size = p_edit.get("originalFontSize", font_size)
             color = tuple(p_edit.get("color", (0, 0, 0)))
-            line_height = p_edit.get("lineHeight", font_size * 1.2)
+
+            # 根据字体大小变化动态调整行高
+            # lineHeight 来自前端，是原始字体对应的绝对行高（PDF坐标）
+            # 需要按比例调整为新字体对应的行高
+            original_line_height = p_edit.get("lineHeight", original_font_size * 1.2)
+            if original_font_size > 0 and abs(font_size - original_font_size) > 0.1:
+                # 字体大小有变化，按比例调整行高
+                line_height_ratio = original_line_height / original_font_size
+                line_height = font_size * line_height_ratio
+            else:
+                line_height = original_line_height
+
             original_font = p_edit.get("fontName", "")
             target_bbox = fitz.Rect(new_bbox) if new_bbox else old_bbox
 
@@ -1261,6 +1424,29 @@ class PDFService:
 
                 if angle and angle % 360 != 0:
                     img_bytes = _rotate_image_bytes(img_bytes, angle, ext)
+
+                # 压缩图片：转换为 JPEG 格式（质量 85）以减小文件大小
+                try:
+                    from PIL import Image
+                    import io
+                    pil_img = Image.open(io.BytesIO(img_bytes))
+                    # 如果有 alpha 通道，转换为 RGB
+                    if pil_img.mode in ('RGBA', 'LA', 'PA'):
+                        # 创建白色背景
+                        background = Image.new('RGB', pil_img.size, (255, 255, 255))
+                        if pil_img.mode == 'RGBA':
+                            background.paste(pil_img, mask=pil_img.split()[3])
+                        else:
+                            background.paste(pil_img)
+                        pil_img = background
+                    elif pil_img.mode != 'RGB':
+                        pil_img = pil_img.convert('RGB')
+                    # 保存为 JPEG
+                    output = io.BytesIO()
+                    pil_img.save(output, format='JPEG', quality=85, optimize=True)
+                    img_bytes = output.getvalue()
+                except Exception as e:
+                    print(f"[WARN] Image compression failed, using original: {e}")
 
                 page.insert_image(rect, stream=img_bytes, keep_proportion=True)
 

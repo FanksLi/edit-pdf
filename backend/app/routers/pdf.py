@@ -11,6 +11,7 @@ from app.models.pdf import (
     UploadResponse, PageContentResponse, RenderResponse,
     ModifyRequest, ModifyResponse, ErrorResponse,
     ImageBlock, DrawingBlock, Paragraph, FontVariant,
+    Table, TableRow, TableCell,
 )
 from app.services.pdf_service import PDFService
 from app.config import UPLOAD_DIR, IMAGE_DIR
@@ -102,13 +103,16 @@ async def get_page_text(file_id: str, page_num: int = 0):
 
     try:
         width, height = service.get_page_size(page_num)
-        paragraphs = service.get_page_text(page_num)
+        page_data = service.get_page_text(page_num)
+        paragraphs = page_data["paragraphs"]
+        drawings = page_data["drawings"]
+        tables = page_data["tables"]
         images = service.get_page_images(page_num)
-        drawings = service.get_page_drawings(page_num)
 
         return PageContentResponse(
             page_width=width,
             page_height=height,
+            tables=[Table(**t) for t in tables],
             drawings=[DrawingBlock(**d) for d in drawings],
             paragraphs=[Paragraph(**p) for p in paragraphs],
             images=[ImageBlock(**img) for img in images],

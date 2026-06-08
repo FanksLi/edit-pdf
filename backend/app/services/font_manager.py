@@ -137,11 +137,38 @@ class FontManager:
         return results
 
     def find_local_font(self, family: str, weight: str = "normal", style: str = "normal") -> Optional[str]:
-        """在 localFont 目录中查找指定字体族的变体文件。"""
+        """在 localFont 目录中查找指定字体族的变体文件。
+
+        支持多种命名格式：
+        - LiberationSerif → Liberation_Serif
+        - Liberation_Serif → Liberation_Serif
+        - liberationserif → Liberation_Serif
+        """
         if not self._local_font_dir:
             return None
-        family_dir = self._local_font_dir / family
-        if not family_dir.exists():
+
+        # 尝试多种目录名格式
+        possible_names = [
+            family,                           # 原始名称
+            family.replace("_", ""),          # 去掉下划线后的反向匹配
+            family.replace(" ", "_"),         # 空格转下划线
+        ]
+
+        # 生成可能的下划线分隔格式：LiberationSerif → Liberation_Serif
+        import re
+        if "_" not in family:
+            # 在大写字母前插入下划线（首字母除外）
+            snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', family)
+            possible_names.append(snake_case)
+
+        family_dir = None
+        for name in possible_names:
+            candidate = self._local_font_dir / name
+            if candidate.exists():
+                family_dir = candidate
+                break
+
+        if not family_dir:
             return None
 
         need_bold = weight == "bold"
@@ -211,7 +238,7 @@ class FontManager:
         return None, None
 
     def _try_insert(self, inserter, font_file, font_name):
-        """尝试插入文字，依次走 localFont → 系统 TTF → TTC 提取 → None。"""
+        """尝试插入文字，依次走 localFont → 系统 TTF → TTC 提取 → 内置字体。"""
         # 1. 直接用 font_file
         if font_file:
             try:
@@ -221,7 +248,18 @@ class FontManager:
             except Exception:
                 pass
 
-        # 2. 系统 TTF/TTC
+        # 2. 本地字体目录（localFont）
+        if font_name and self._local_font_dir:
+            local_font = self.find_local_font(font_name)
+            if local_font:
+                try:
+                    fname = self._get_or_create_fontname(local_font)
+                    inserter(fname, local_font)
+                    return True
+                except Exception:
+                    pass
+
+        # 3. 系统 TTF/TTC
         if font_name:
             sys_font = find_system_font(font_name)
             if sys_font:

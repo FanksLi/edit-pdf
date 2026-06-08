@@ -4,24 +4,53 @@ import FabricCanvas from './FabricCanvas';
 import PageSidebar from './PageSidebar';
 import Toolbar from './Toolbar';
 import { uploadPDF, exportAllPages, getFonts, uploadImage } from '../services/api';
+import useCanvasStore from '../stores/canvasStore';
 
 function PDFViewer() {
   const [fileId, setFileId] = useState(null);
   const [pageCount, setPageCount] = useState(0);
-  const [pageSizes, setPageSizes] = useState([]); // [{width, height}, ...]
+  const [pageSizes, setPageSizes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [currentPage, setCurrentPage] = useState(0);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
   const [selectionSnapshot, setSelectionSnapshot] = useState(null);
   const [fonts, setFonts] = useState([]);
 
   const selectedObjRef = useRef(null);
   const activeCanvasRef = useRef(null);
-  const pageRefs = useRef({}); // pageNum → ref
+  const pageRefs = useRef({});
   const scrollContainerRef = useRef(null);
   const visiblePageRef = useRef(0);
+
+  // zustand store
+  const setStoreFileId = useCanvasStore(state => state.setFileId);
+  const clearPages = useCanvasStore(state => state.clearPages);
+  const setCurrentPageInStore = useCanvasStore(state => state.setCurrentPage);
+  const updateObject = useCanvasStore(state => state.updateObject);
+
+  // zundo temporal - undo/redo
+  // temporal 是一个独立的 zustand store
+  const temporalStore = useCanvasStore.temporal;
+  const undo = temporalStore.getState().undo;
+  const redo = temporalStore.getState().redo;
+  const clear = temporalStore.getState().clear;
+
+  // 使用 useState 来追踪 pastStates/futureStates 长度变化
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  // 监听 temporal store 变化
+  useEffect(() => {
+    const unsubscribe = temporalStore.subscribe((state) => {
+      setCanUndo(state.pastStates.length > 0);
+      setCanRedo(state.futureStates.length > 0);
+    });
+    // 初始化时也检查一次
+    const state = temporalStore.getState();
+    setCanUndo(state.pastStates.length > 0);
+    setCanRedo(state.futureStates.length > 0);
+    return unsubscribe;
+  }, [temporalStore]);
 
   const handleUpload = async (file) => {
     setLoading(true);
@@ -31,17 +60,19 @@ function PDFViewer() {
       setFileId(result.file_id);
       setPageCount(result.page_count);
 
-      // 单页时用返回的尺寸，多页时先占位
       if (result.page_count === 1) {
         setPageSizes([{ width: result.page_width, height: result.page_height }]);
       } else {
-        // 先用首页尺寸占位，后续懒加载时会更新
         const sizes = Array.from({ length: result.page_count }, () => ({
           width: result.page_width,
           height: result.page_height,
         }));
         setPageSizes(sizes);
       }
+
+      // 初始化 zustand store
+      setStoreFileId(result.file_id);
+      clear(); // 清空历史记录
     } catch (err) {
       setError(err.message);
     } finally {
@@ -49,7 +80,7 @@ function PDFViewer() {
     }
   };
 
-  // 追踪当前可见页（IntersectionObserver）
+  // 追踪当前可见页
   useEffect(() => {
     if (!fileId || pageCount === 0) return;
 
@@ -61,7 +92,6 @@ function PDFViewer() {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        // 找到可见面积最大的页面
         let maxRatio = 0;
         let mostVisible = visiblePageRef.current;
 
@@ -75,6 +105,7 @@ function PDFViewer() {
         if (mostVisible !== visiblePageRef.current) {
           visiblePageRef.current = mostVisible;
           setCurrentPage(mostVisible);
+          setCurrentPageInStore(mostVisible);
         }
       },
       { root: container, threshold: 0.3 }
@@ -82,37 +113,15 @@ function PDFViewer() {
 
     pages.forEach(p => observer.observe(p));
     return () => observer.disconnect();
-  }, [fileId, pageCount, pageSizes]);
-
-  // 定期同步 undo/redo 状态
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const ref = pageRefs.current[visiblePageRef.current];
-      if (ref) {
-        setCanUndo(ref.canUndo());
-        setCanRedo(ref.canRedo());
-      }
-    }, 300);
-    return () => clearInterval(interval);
-  }, []);
+  }, [fileId, pageCount, pageSizes, setCurrentPageInStore]);
 
   const handleUndo = useCallback(() => {
-    const ref = pageRefs.current[visiblePageRef.current];
-    if (ref) {
-      ref.undo();
-      setCanUndo(ref.canUndo());
-      setCanRedo(ref.canRedo());
-    }
-  }, []);
+    undo();
+  }, [undo]);
 
   const handleRedo = useCallback(() => {
-    const ref = pageRefs.current[visiblePageRef.current];
-    if (ref) {
-      ref.redo();
-      setCanUndo(ref.canUndo());
-      setCanRedo(ref.canRedo());
-    }
-  }, []);
+    redo();
+  }, [redo]);
 
   const scrollToPage = useCallback((pageNum) => {
     const container = scrollContainerRef.current;
@@ -145,9 +154,9 @@ function PDFViewer() {
   }, [pageCount, handleUndo, handleRedo, scrollToPage]);
 
   const _buildSnapshot = (obj) => {
-    const isPdfText = obj.type === 'PdfText';
+    const isPdfText = obj.type === 'PdfText' || obj.constructor?.type === 'PdfText';
     return {
-      type: obj.type,
+      type: isPdfText ? 'PdfText' : obj.type,
       text: isPdfText ? obj.getText() : obj.text,
       fontSize: obj.fontSize,
       fontFamily: obj.fontFamily,
@@ -223,7 +232,6 @@ function PDFViewer() {
     if (!obj || !canvas) return;
 
     if (obj.updateProperty) {
-      // PdfTextObject — handles DOM sync internally
       obj.updateProperty(prop, value);
     } else {
       if (prop === 'fontFamily') {
@@ -243,16 +251,37 @@ function PDFViewer() {
 
     if (obj._pdfData) obj._pdfData._edited = true;
 
+    // 属性修改后更新 zustand 状态
+    const objId = obj._pdfData?.id || obj._newId;
+    if (objId) {
+      const isPdfText = obj.type === 'PdfText' || obj.constructor?.type === 'PdfText';
+      const updates = {
+        left: obj.left,
+        top: obj.top,
+        width: obj.width,
+        height: obj.height,
+      };
+      // 添加属性特定的更新
+      if (isPdfText) {
+        if (prop === 'fontFamily') updates.fontFamily = obj.fontFamily;
+        else if (prop === 'fontSize') updates.fontSize = obj.fontSize;
+        else if (prop === 'fontWeight') updates.fontWeight = value;
+        else if (prop === 'fontStyle') updates.fontStyle = value;
+        else if (prop === 'fill') updates.color = value;
+        else if (prop === 'textAlign') updates.textAlign = value;
+      }
+      updateObject(visiblePageRef.current, objId, updates);
+    }
+
     canvas.requestRenderAll();
     setSelectionSnapshot(_buildSnapshot(obj));
-  }, []);
+  }, [updateObject]);
 
   const handleExport = async () => {
     if (!fileId) return;
     setLoading(true);
     setError(null);
     try {
-      // 收集所有页的 edits
       const pagesEdits = {};
       for (let i = 0; i < pageCount; i++) {
         const ref = pageRefs.current[i];
@@ -288,6 +317,8 @@ function PDFViewer() {
     pageRefs.current = {};
     visiblePageRef.current = 0;
     setError(null);
+    clearPages();
+    clear(); // 清空历史记录
   };
 
   if (error) {
@@ -361,7 +392,6 @@ function PDFViewer() {
 
       {/* 主体：侧边栏 + 滚动区域 */}
       <div className="flex flex-1 overflow-hidden">
-        {/* 侧边栏（内部响应式：PC 左侧 / 手机底部） */}
         <PageSidebar
           fileId={fileId}
           pageCount={pageCount}
@@ -369,7 +399,6 @@ function PDFViewer() {
           onPageClick={scrollToPage}
         />
 
-        {/* 页面滚动容器 */}
         <div
           ref={scrollContainerRef}
           className="flex-1 overflow-y-auto p-4 md:p-8 space-y-4 md:space-y-6 md:pb-8 pb-24"
