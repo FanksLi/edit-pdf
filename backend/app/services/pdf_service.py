@@ -228,6 +228,190 @@ class PDFService:
 
         return result
 
+    def _is_adjacent(self, rect1, rect2, gap_threshold=10):
+        """判断两个矩形是否相邻（水平或垂直间距 < threshold）"""
+        x0a, y0a, x1a, y1a = rect1
+        x0b, y0b, x1b, y1b = rect2
+
+        # 水平相邻：Y 范围重叠，X 间距 < threshold
+        y_overlap = max(0, min(y1a, y1b) - max(y0a, y0b))
+        if y_overlap > 0:
+            x_gap = min(abs(x1a - x0b), abs(x1b - x0a))
+            if x_gap < gap_threshold:
+                return True
+
+        # 垂直相邻：X 范围重叠，Y 间距 < threshold
+        x_overlap = max(0, min(x1a, x1b) - max(x0a, x0b))
+        if x_overlap > 0:
+            y_gap = min(abs(y1a - y0b), abs(y1b - y0a))
+            if y_gap < gap_threshold:
+                return True
+
+        return False
+
+    def _cluster_adjacent_rects(self, drawings, gap_threshold=10):
+        """用连通分量聚类相邻矩形，返回独立表格候选组"""
+        n = len(drawings)
+        if n == 0:
+            return []
+
+        # 构建邻接矩阵
+        adj = [[False] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(i + 1, n):
+                if self._is_adjacent(drawings[i]["rect"], drawings[j]["rect"], gap_threshold):
+                    adj[i][j] = adj[j][i] = True
+
+        # DFS 找连通分量
+        visited = [False] * n
+        groups = []
+
+        def dfs(node, group):
+            visited[node] = True
+            group.append(node)
+            for neighbor in range(n):
+                if adj[node][neighbor] and not visited[neighbor]:
+                    dfs(neighbor, group)
+
+        for i in range(n):
+            if not visited[i]:
+                group = []
+                dfs(i, group)
+                groups.append([drawings[idx] for idx in group])
+
+        return groups
+
+    def _group_rows_cols(self, group, y_threshold=5, x_threshold=5):
+        """将矩形组按 Y/X 坐标分组为 rows 和 cols"""
+        rects = [d["rect"] for d in group]
+
+        # 按 Y 坐标分 rows
+        sorted_by_y = sorted(rects, key=lambda r: r[1])
+        rows = []
+        current_row = [sorted_by_y[0]]
+        for r in sorted_by_y[1:]:
+            if abs(r[1] - current_row[-1][1]) < y_threshold:
+                current_row.append(r)
+            else:
+                rows.append(current_row)
+                current_row = [r]
+        rows.append(current_row)
+
+        # 按 X 坐标分 cols
+        sorted_by_x = sorted(rects, key=lambda r: r[0])
+        cols = []
+        current_col = [sorted_by_x[0]]
+        for r in sorted_by_x[1:]:
+            if abs(r[0] - current_col[-1][0]) < x_threshold:
+                current_col.append(r)
+            else:
+                cols.append(current_col)
+                current_col = [r]
+        cols.append(current_col)
+
+        return rows, cols
+
+    def _build_table_structure(self, group, rows, cols, table_id):
+        """构建表格 rows × cells 结构"""
+        table_rows = []
+
+        for row_idx, row_rects in enumerate(rows):
+            cells = []
+            # 按 X 排序当前行的矩形
+            row_rects_sorted = sorted(row_rects, key=lambda r: r[0])
+
+            for col_idx, rect in enumerate(row_rects_sorted):
+                # 找对应的 drawing 数据
+                drawing = next((d for d in group if d["rect"] == rect), None)
+                if not drawing:
+                    continue
+
+                cell_id = f"{table_id}-cell-{row_idx}-{col_idx}"
+                cells.append({
+                    "id": cell_id,
+                    "rect": list(rect),
+                    "fill": drawing.get("fill"),
+                    "stroke": drawing.get("stroke"),
+                    "paragraph_ids": [],
+                })
+
+            if cells:
+                table_rows.append({"cells": cells})
+
+        # 计算表格整体 bbox
+        all_rects = [d["rect"] for d in group]
+        bbox = [
+            min(r[0] for r in all_rects),
+            min(r[1] for r in all_rects),
+            max(r[2] for r in all_rects),
+            max(r[3] for r in all_rects),
+        ]
+
+        return {
+            "id": table_id,
+            "bbox": bbox,
+            "rows": table_rows,
+        }
+
+    def _detect_tables(self, drawings):
+        """从 drawings 中识别表格结构"""
+        # 过滤有效矩形
+        valid_drawings = [
+            d for d in drawings
+            if d["rect"][2] - d["rect"][0] > 5 and d["rect"][3] - d["rect"][1] > 5
+        ]
+
+        if len(valid_drawings) < 4:
+            return []
+
+        # 聚类
+        groups = self._cluster_adjacent_rects(valid_drawings, gap_threshold=10)
+
+        tables = []
+        for group_idx, group in enumerate(groups):
+            # 校验：至少 4 个矩形
+            if len(group) < 4:
+                continue
+
+            # 网格化
+            rows, cols = self._group_rows_cols(group)
+
+            # 校验：至少 2 行 2 列
+            if len(rows) < 2 or len(cols) < 2:
+                continue
+
+            # 构建表格结构
+            table_id = f"table-{group_idx}"
+            table = self._build_table_structure(group, rows, cols, table_id)
+            tables.append(table)
+
+        return tables
+
+    def _assign_paragraphs_to_cells(self, paragraphs, tables):
+        """将段落分配到对应的 cell"""
+        # 给 paragraphs 添加 id
+        for idx, para in enumerate(paragraphs):
+            para["id"] = f"para-{idx}"
+            para["tableId"] = None
+            para["cellId"] = None
+
+        # 遍历每个段落找所属 cell
+        for para in paragraphs:
+            px0, py0, px1, py1 = para["bbox"]
+
+            for table in tables:
+                for row in table["rows"]:
+                    for cell in row["cells"]:
+                        cx0, cy0, cx1, cy1 = cell["rect"]
+                        # 判断段落是否完全在 cell 内
+                        if cx0 <= px0 and cy0 <= py0 and cx1 >= px1 and cy1 >= py1:
+                            para["tableId"] = table["id"]
+                            para["cellId"] = cell["id"]
+                            cell["paragraph_ids"].append(para["id"])
+                            break
+
+        return paragraphs
+
     def _detect_cell_alignment(self, paragraphs: list, drawings: list) -> list:
         """检测段落文字在表格 cell 中的对齐方式。
 
@@ -277,8 +461,8 @@ class PDFService:
 
         return paragraphs
 
-    def get_page_text(self, page_num: int) -> List[Dict[str, Any]]:
-        """提取页面文字，按行间距比值自动分段"""
+    def get_page_text(self, page_num: int) -> Dict[str, Any]:
+        """提取页面文字和表格结构"""
         if page_num < 0 or page_num >= len(self.doc):
             raise ValueError(f"Page {page_num} out of range")
 
@@ -287,7 +471,34 @@ class PDFService:
         paragraphs = self._gap_based_paragraphs(blocks)
 
         drawings = self.get_page_drawings(page_num)
-        return self._detect_cell_alignment(paragraphs, drawings)
+
+        # 检测表格
+        tables = self._detect_tables(drawings)
+
+        # 分配段落到 cell
+        paragraphs = self._assign_paragraphs_to_cells(paragraphs, tables)
+
+        # 检测对齐方式（使用新的 cell 信息）
+        paragraphs = self._detect_cell_alignment(paragraphs, drawings)
+
+        # 过滤掉属于表格的 drawings
+        table_rects = set()
+        for table in tables:
+            for row in table["rows"]:
+                for cell in row["cells"]:
+                    table_rects.add(tuple(cell["rect"]))
+
+        non_table_drawings = [
+            d for d in drawings
+            if tuple(d["rect"]) not in table_rects
+        ]
+
+        return {
+            "tables": tables,
+            "paragraphs": paragraphs,
+            "drawings": non_table_drawings,
+            "images": [],  # 保持兼容
+        }
 
     def get_page_drawings(self, page_num: int) -> List[Dict[str, Any]]:
         """提取页面绘图元素（矩形、线条等），带 z_index
