@@ -11,6 +11,7 @@ function NavBar() {
       <span className="text-lg font-bold text-gray-800 mr-4">PDF 工具</span>
       <NavLink to="/" className={linkClass}>编辑 PDF</NavLink>
       <NavLink to="/convert" className={linkClass}>PDF 转换</NavLink>
+      <NavLink to="/to-pdf" className={linkClass}>转 PDF</NavLink>
     </nav>
   )
 }

@@ -123,3 +123,20 @@ export async function uploadImage(fileId, file) {
   }
   return res.json();
 }
+
+/**
+ * Office 文档或图片转换为 PDF
+ */
+export async function convertToPdf(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch('/api/to-pdf/', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Conversion failed' }));
+    throw new Error(error.detail || 'Conversion failed');
+  }
+  return res.blob();
+}

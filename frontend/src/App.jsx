@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router-dom'
 import NavBar from './components/NavBar'
 import EditorPage from './pages/EditorPage'
 import ConvertPage from './pages/ConvertPage'
+import ToPdfPage from './pages/ToPdfPage'
 
 function App() {
   return (
@@ -10,6 +11,7 @@ function App() {
       <Routes>
         <Route path="/" element={<EditorPage />} />
         <Route path="/convert" element={<ConvertPage />} />
+        <Route path="/to-pdf" element={<ToPdfPage />} />
       </Routes>
     </div>
   )
