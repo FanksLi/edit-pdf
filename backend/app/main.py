@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import pdf, convert
+from app.routers import pdf, convert, to_pdf
 from app.config import RENDER_DIR, IMAGE_DIR, LOCAL_FONT_DIR
 
 app = FastAPI(
@@ -30,6 +30,7 @@ app.mount("/fonts", StaticFiles(directory=str(LOCAL_FONT_DIR)), name="fonts")
 # 注册路由
 app.include_router(pdf.router)
 app.include_router(convert.router)
+app.include_router(to_pdf.router)
 
 
 @app.get("/")
