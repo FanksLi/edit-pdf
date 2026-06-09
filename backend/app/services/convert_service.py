@@ -401,3 +401,73 @@ def _convert_via_libreoffice(pdf_bytes: bytes, target_format: str, fmt_info: dic
     finally:
         _stop_listener(listener)
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def convert_to_pdf(file_bytes: bytes, source_format: str, original_filename: str) -> dict:
+    """将 Office 文档或图片转换为 PDF
+
+    Args:
+        file_bytes: 源文件字节流
+        source_format: 源格式（docx/xlsx/pptx/jpg/jpeg/png）
+        original_filename: 原始文件名
+
+    Returns:
+        dict: {"bytes": pdf_bytes, "mime": "application/pdf", "filename": "xxx.pdf"}
+
+    Raises:
+        ValueError: 不支持的格式
+        RuntimeError: LibreOffice转换失败
+    """
+    if source_format not in TO_PDF_FORMATS:
+        raise ValueError(f"Unsupported source format: {source_format}")
+
+    fmt_info = TO_PDF_FORMATS[source_format]
+
+    tmp_dir = tempfile.mkdtemp()
+    listener = None
+
+    try:
+        # 写入临时源文件
+        source_ext = fmt_info["ext"]
+        source_path = Path(tmp_dir) / f"input{source_ext}"
+        source_path.write_bytes(file_bytes)
+
+        # 输出PDF路径
+        output_path = Path(tmp_dir) / "output.pdf"
+
+        # 获取或启动监听进程（复用）
+        listener = _get_or_start_listener()
+
+        # 查找LibreOffice Python
+        lo_python = _find_lo_python()
+        if not lo_python:
+            raise RuntimeError("LibreOffice Python not found")
+
+        # 写入转换脚本
+        script_path = Path(tmp_dir) / "_convert_to_pdf.py"
+        script_path.write_text(_CONVERT_TO_PDF_SCRIPT)
+
+        # 执行转换
+        result = subprocess.run(
+            [lo_python, str(script_path), str(source_path), str(output_path), fmt_info["import_filter"]],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        if result.returncode != 0 or "OK" not in (result.stdout or ""):
+            raise RuntimeError(f"Conversion failed: {result.stderr or result.stdout}")
+
+        if not output_path.exists():
+            raise FileNotFoundError("Converted PDF not found")
+
+        # 读取生成的PDF
+        pdf_bytes = output_path.read_bytes()
+        stem = Path(original_filename).stem
+
+        return {
+            "bytes": pdf_bytes,
+            "mime": "application/pdf",
+            "filename": f"{stem}.pdf",
+        }
+    finally:
+        # 注意：不在此停止监听进程，保持复用
+        shutil.rmtree(tmp_dir, ignore_errors=True)
