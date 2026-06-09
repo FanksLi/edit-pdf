@@ -116,7 +116,6 @@ const TipTapEditor = forwardRef(function TipTapEditor(
           text-align: ${textAlign || 'left'};
           line-height: ${lineHeight || 1.2};
           min-width: 10px;
-          width: 100%;
           min-height: ${height ? `${height}px` : 'auto'};
           background: transparent;
           outline: none;
@@ -136,39 +135,42 @@ const TipTapEditor = forwardRef(function TipTapEditor(
     onUpdate: ({ editor }) => {
       // 内容更新时通知父组件
       if (onUpdate) {
-        const element = editor.options.element;
-        const scrollHeight = element?.scrollHeight || height;
+        // 延迟测量，确保 DOM 已重绘
+        requestAnimationFrame(() => {
+          const element = editor.options.element;
+          const scrollHeight = element?.scrollHeight || height;
 
-        // 测量实际内容宽度（遍历所有文本节点）
-        let maxLineWidth = 0;
-        const doc = editor.state.doc;
-        doc.descendants((node, pos) => {
-          if (node.isText) {
-            // 创建临时 span 测量宽度
-            const span = document.createElement('span');
-            span.style.cssText = `
-              position: absolute;
-              visibility: hidden;
-              white-space: pre;
-              font-size: ${element.style.fontSize};
-              font-family: ${element.style.fontFamily};
-              font-weight: ${element.style.fontWeight};
-              font-style: ${element.style.fontStyle};
-            `;
-            span.textContent = node.text;
-            document.body.appendChild(span);
-            const w = span.offsetWidth;
-            document.body.removeChild(span);
-            if (w > maxLineWidth) maxLineWidth = w;
-          }
-        });
+          // 测量实际内容宽度（遍历所有文本节点）
+          let maxLineWidth = 0;
+          const doc = editor.state.doc;
+          doc.descendants((node, pos) => {
+            if (node.isText) {
+              // 创建临时 span 测量宽度
+              const span = document.createElement('span');
+              span.style.cssText = `
+                position: absolute;
+                visibility: hidden;
+                white-space: pre;
+                font-size: ${element.style.fontSize};
+                font-family: ${element.style.fontFamily};
+                font-weight: ${element.style.fontWeight};
+                font-style: ${element.style.fontStyle};
+              `;
+              span.textContent = node.text;
+              document.body.appendChild(span);
+              const w = span.offsetWidth;
+              document.body.removeChild(span);
+              if (w > maxLineWidth) maxLineWidth = w;
+            }
+          });
 
-        onUpdate({
-          text: editor.getText(),
-          html: editor.getHTML(),
-          json: editor.getJSON(),
-          scrollHeight,
-          contentWidth: maxLineWidth + 4, // 加一点 padding
+          onUpdate({
+            text: editor.getText(),
+            html: editor.getHTML(),
+            json: editor.getJSON(),
+            scrollHeight,
+            contentWidth: maxLineWidth + 4, // 加一点 padding
+          });
         });
       }
     },

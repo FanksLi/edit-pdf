@@ -144,7 +144,7 @@ class PDFService:
 
                     # 检查颜色、字号、字体是否与基础样式不同
                     color_diff = any(abs(s_color[i] - base_color[i]) > 0.01 for i in range(3))
-                    font_size_diff = abs(s_font_size - base_font_size) > 0.5
+                    font_size_diff = abs(s_font_size - base_font_size) >= 0.5
                     font_name_diff = s_font_name != base_font_name
 
                     if color_diff or font_size_diff or font_name_diff:
@@ -158,8 +158,13 @@ class PDFService:
                         if font_size_diff:
                             style_span["fontSize"] = s_font_size
                         if font_name_diff:
-                            # 清理字体名（去掉 PDF 子集前缀）
+                            # 清理字体名（去掉 PDF 子集前缀和变体后缀）
                             clean_font = s_font_name.split("+", 1)[-1] if "+" in s_font_name else s_font_name
+                            # 去掉常见后缀：-Regular, -Bold, -Italic, -BoldItalic
+                            for suffix in ['-Regular', '-Bold', '-Italic', '-BoldItalic']:
+                                if clean_font.endswith(suffix):
+                                    clean_font = clean_font[:-len(suffix)]
+                                    break
                             style_span["fontFamily"] = clean_font
                         inline_spans.append(style_span)
 

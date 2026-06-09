@@ -3,6 +3,7 @@
 .tiptap-wrapper {
   position: absolute;
   pointer-events: none;
+  overflow: visible;
 }
 
 .tiptap-container {
@@ -14,11 +15,15 @@
   outline: none;
   padding: 0;
   margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 .tiptap-editor p {
   margin: 0;
   padding: 0;
+  white-space: pre-wrap;
+  /* 使用 line-height 继承父元素值，确保多段落行高一致 */
 }
 
 .tiptap-editor p:first-child {
@@ -27,6 +32,11 @@
 
 .tiptap-editor p:last-child {
   margin-bottom: 0;
+}
+
+/* 确保相邻段落无间距 */
+.tiptap-editor p + p {
+  margin-top: 0;
 }
 
 /* 编辑模式时的样式 */

@@ -115,6 +115,7 @@ class PdfTextObject extends Rect {
     if (this._editing) return;
     this._editing = true;
     this._originalHeight = this.height;
+    this._originalWidth = this.width * (this.scaleX || 1);
 
     // 锁定 Fabric 对象的交互
     this.lockMovementX = true;
@@ -135,6 +136,66 @@ class PdfTextObject extends Rect {
         containerEl.style.overflow = 'visible';
         containerEl.style.background = 'rgba(59,130,246,0.05)';
       }
+
+      // 测量实际内容宽度，如果超出当前宽度则扩展
+      this._measureAndExpandWidth();
+    }
+  }
+
+  /**
+   * 测量内容实际宽度，超出时扩展容器
+   */
+  _measureAndExpandWidth() {
+    const editorEl = this._editorRef?.current?.getEditor?.()?.options?.element;
+    if (!editorEl) return;
+
+    let maxLineWidth = 0;
+    const doc = this._editorRef?.current?.getEditor?.()?.state?.doc;
+    if (!doc) return;
+
+    const computedStyle = window.getComputedStyle(editorEl);
+    const measureSpan = document.createElement('span');
+    measureSpan.style.cssText = `
+      position: absolute;
+      visibility: hidden;
+      white-space: pre;
+      font-size: ${computedStyle.fontSize};
+      font-family: ${computedStyle.fontFamily};
+      font-weight: ${computedStyle.fontWeight};
+      font-style: ${computedStyle.fontStyle};
+    `;
+    document.body.appendChild(measureSpan);
+
+    doc.descendants((node) => {
+      if (node.isText && node.text) {
+        measureSpan.textContent = node.text;
+        const w = measureSpan.offsetWidth;
+        if (w > maxLineWidth) maxLineWidth = w;
+      }
+    });
+
+    document.body.removeChild(measureSpan);
+
+    const currentWidth = this.width * (this.scaleX || 1);
+    // 只有内容宽度明显超出当前宽度才扩展（容差 10px 避免测量误差）
+    if (maxLineWidth > currentWidth + 10) {
+      const newWidth = maxLineWidth + 8; // padding
+      // 宽度增加时，保持左边缘固定，中心点向右移动
+      const deltaWidth = newWidth - currentWidth;
+      this.set({
+        width: newWidth,
+        scaleX: 1,
+        left: this.left + deltaWidth / 2
+      });
+      this.setCoords();
+
+      const container = this._tipTapContainer;
+      if (container) {
+        container.style.width = `${newWidth}px`;
+      }
+      editorEl.style.width = `${newWidth}px`;
+
+      this.canvas?.requestRenderAll();
     }
   }
 

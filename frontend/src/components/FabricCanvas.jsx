@@ -131,71 +131,100 @@ function convertTipTapToInlineStyles(richContent, baseStyles = {}, scale = 1) {
  * @returns {Object} TipTap JSON 文档
  */
 function convertInlineSpansToTipTap(text, inlineSpans, scale = 1) {
+  // 按 \n 分割为多行，每行作为一个段落
+  const lines = text.split('\n');
+
   if (!inlineSpans || inlineSpans.length === 0) {
     return {
       type: 'doc',
-      content: [{
+      content: lines.map(line => ({
         type: 'paragraph',
-        content: [{ type: 'text', text }],
-      }],
+        content: [{ type: 'text', text: line }],
+      })),
     };
   }
 
   // 按 start 排序
   const sortedSpans = [...inlineSpans].sort((a, b) => a.start - b.start);
-  const textNodes = [];
-  let currentPos = 0;
 
-  for (const span of sortedSpans) {
-    const start = span.start;
-    const end = Math.min(span.end, text.length);
-
-    // 样式前的普通文本
-    if (start > currentPos) {
-      textNodes.push({ type: 'text', text: text.slice(currentPos, start) });
-    }
-
-    // 带样式的文本
-    if (end > start) {
-      const node = { type: 'text', text: text.slice(start, end) };
-      const marks = [];
-
-      // 颜色
-      if (span.color) {
-        const r = Math.round(span.color[0] * 255);
-        const g = Math.round(span.color[1] * 255);
-        const b = Math.round(span.color[2] * 255);
-        marks.push({ type: 'textStyle', attrs: { color: `rgb(${r},${g},${b})` } });
-      }
-
-      // 字号（pt 转 px）
-      if (span.fontSize) {
-        const fontSizePx = Math.round(span.fontSize * scale * 10) / 10;
-        marks.push({ type: 'textStyle', attrs: { fontSize: `${fontSizePx}px` } });
-      }
-
-      // 字体
-      if (span.fontFamily) {
-        marks.push({ type: 'textStyle', attrs: { fontFamily: span.fontFamily } });
-      }
-
-      if (marks.length > 0) {
-        node.marks = marks;
-      }
-      textNodes.push(node);
-    }
-
-    currentPos = end;
+  // 计算每行的起始偏移
+  let lineOffsets = [0];
+  for (let i = 0; i < lines.length - 1; i++) {
+    lineOffsets.push(lineOffsets[i] + lines[i].length + 1); // +1 for \n
   }
 
-  // 剩余文本
-  if (currentPos < text.length) {
-    textNodes.push({ type: 'text', text: text.slice(currentPos) });
-  }
+  // 为每行构建内容
+  const paragraphs = lines.map((line, lineIdx) => {
+    const lineStart = lineOffsets[lineIdx];
+    const lineEnd = lineStart + line.length;
+    const textNodes = [];
+    let currentPos = lineStart;
+
+    // 找到与当前行有交集的 spans
+    for (const span of sortedSpans) {
+      const spanStart = span.start;
+      const spanEnd = span.end;
+
+      // 跳过完全在当前行之前的 span
+      if (spanEnd <= lineStart) continue;
+      // 跳过完全在当前行之后的 span
+      if (spanStart >= lineEnd) break;
+
+      // 样式前的普通文本
+      if (spanStart > currentPos) {
+        const plainStart = currentPos;
+        const plainEnd = Math.min(spanStart, lineEnd);
+        if (plainEnd > plainStart) {
+          textNodes.push({ type: 'text', text: text.slice(plainStart, plainEnd) });
+        }
+      }
+
+      // 带样式的文本
+      const styleStart = Math.max(spanStart, lineStart);
+      const styleEnd = Math.min(spanEnd, lineEnd);
+      if (styleEnd > styleStart) {
+        const node = { type: 'text', text: text.slice(styleStart, styleEnd) };
+        const textStyleAttrs = {};
+
+        if (span.color) {
+          const r = Math.round(span.color[0] * 255);
+          const g = Math.round(span.color[1] * 255);
+          const b = Math.round(span.color[2] * 255);
+          textStyleAttrs.color = `rgb(${r},${g},${b})`;
+        }
+
+        if (span.fontSize) {
+          const fontSizePx = Math.round(span.fontSize * scale * 10) / 10;
+          textStyleAttrs.fontSize = `${fontSizePx}px`;
+        }
+
+        if (span.fontFamily) {
+          textStyleAttrs.fontFamily = span.fontFamily;
+        }
+
+        if (Object.keys(textStyleAttrs).length > 0) {
+          node.marks = [{ type: 'textStyle', attrs: textStyleAttrs }];
+        }
+        textNodes.push(node);
+      }
+
+      currentPos = Math.max(currentPos, spanEnd);
+    }
+
+    // 剩余文本
+    if (currentPos < lineEnd) {
+      textNodes.push({ type: 'text', text: text.slice(currentPos, lineEnd) });
+    }
+
+    return {
+      type: 'paragraph',
+      content: textNodes.length > 0 ? textNodes : [{ type: 'text', text: '' }],
+    };
+  });
 
   return {
     type: 'doc',
-    content: [{ type: 'paragraph', content: textNodes }],
+    content: paragraphs,
   };
 }
 
@@ -256,7 +285,8 @@ const FabricCanvas = forwardRef(function FabricCanvas(
         const pdf = obj._pdfData;
 
         if (obj instanceof PdfTextObject) {
-          const currentText = obj.getText();
+          // TipTap getText() 在段落间返回双换行，需要替换为单换行
+          const currentText = obj.getText().replace(/\n\n/g, '\n');
           const b = obj.getBounding();
           const newBbox = canvasToPdf(b.left, b.top, b.width, b.height, SCALE);
           const textChanged = currentText !== pdf.originalText;
@@ -430,6 +460,10 @@ const FabricCanvas = forwardRef(function FabricCanvas(
 
       const handleEditorReady = () => {
         _attachTipTapEvents(textObj, editorRef);
+        // 初始化时测量内容宽度，避免文字被挤压
+        requestAnimationFrame(() => {
+          textObj._measureAndExpandWidth?.();
+        });
       };
 
       const handleBlur = (text, html, richContent) => {
@@ -675,9 +709,10 @@ const FabricCanvas = forwardRef(function FabricCanvas(
 
     // 宽度变化（文字换行超出或字体变大）
     const currentWidth = textObj.width * (textObj.scaleX || 1);
-    // 只允许宽度增加，防止退出编辑时测量错误导致宽度异常
-    if (contentWidth && contentWidth > currentWidth && contentWidth < 2000) {
-      textObj.set({ width: contentWidth });
+    // 只允许宽度明显增加（容差 10px），防止测量误差导致频繁调整
+    if (contentWidth && contentWidth > currentWidth + 10 && contentWidth < 2000) {
+      const deltaWidth = contentWidth - currentWidth;
+      textObj.set({ width: contentWidth, left: textObj.left + deltaWidth / 2 });
       textObj.setCoords();
       needsSync = true;
     }
@@ -1151,11 +1186,11 @@ const FabricCanvas = forwardRef(function FabricCanvas(
         position: absolute;
         left: ${pos.left}px;
         top: ${pos.top}px;
-        width: ${pos.width}px;
+        min-width: ${pos.width}px;
         min-height: ${pos.height}px;
-        min-width: 10px;
         background: transparent;
         pointer-events: none;
+        overflow: visible;
         z-index: ${zIndex};
       `;
       tipTapContainer.dataset.textId = `para-${idx}`;
@@ -1168,6 +1203,10 @@ const FabricCanvas = forwardRef(function FabricCanvas(
       const handleEditorReady = () => {
         // 编辑器准备好后绑定到 PdfTextObject
         _attachTipTapEvents(textObj, editorRef);
+        // 初始化时测量内容宽度，避免文字被挤压
+        requestAnimationFrame(() => {
+          textObj._measureAndExpandWidth?.();
+        });
       };
 
       const handleBlur = (text, html, richContent) => {
