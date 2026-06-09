@@ -44,6 +44,39 @@ SUPPORTED_FORMATS = {
     },
 }
 
+TO_PDF_FORMATS = {
+    "docx": {
+        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "ext": ".docx",
+        "import_filter": "Office Open XML Text",
+    },
+    "xlsx": {
+        "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ext": ".xlsx",
+        "import_filter": "Calc Office Open XML",
+    },
+    "pptx": {
+        "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ext": ".pptx",
+        "import_filter": "Impress Office Open XML",
+    },
+    "jpg": {
+        "mime": "image/jpeg",
+        "ext": ".jpg",
+        "import_filter": "draw_jpg_import",
+    },
+    "jpeg": {
+        "mime": "image/jpeg",
+        "ext": ".jpeg",
+        "import_filter": "draw_jpg_import",
+    },
+    "png": {
+        "mime": "image/png",
+        "ext": ".png",
+        "import_filter": "draw_png_import",
+    },
+}
+
 _CONVERT_SCRIPT = '''
 import sys
 import uno
