@@ -7,6 +7,7 @@ import platform
 import re
 import zipfile
 import sys
+import time
 from pathlib import Path
 
 
@@ -129,13 +130,29 @@ print("OK")
 '''
 
 
+# 全局监听进程缓存
+_listener_process = None
+_listener_start_time = None
+
+def _get_or_start_listener():
+    """复用监听进程，避免重复启动"""
+    global _listener_process, _listener_start_time
+
+    if _listener_process and _listener_process.poll() is None:
+        return _listener_process
+
+    # 启动新进程
+    _listener_process = _start_listener()
+    _listener_start_time = time.time()
+    return _listener_process
+
+
 def _start_listener():
     """启动 LibreOffice 监听模式"""
     proc = subprocess.Popen(
         [SOFFICE, "--headless", "--norestore", "--accept=socket,host=localhost,port=2002;urp;"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    import time
     time.sleep(3)
     return proc
 
