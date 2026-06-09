@@ -129,6 +129,55 @@ doc.close(True)
 print("OK")
 '''
 
+_CONVERT_TO_PDF_SCRIPT = '''
+import sys
+import uno
+from com.sun.star.beans import PropertyValue
+
+input_path = sys.argv[1]
+output_path = sys.argv[2]
+import_filter = sys.argv[3]
+
+localContext = uno.getComponentContext()
+resolver = localContext.ServiceManager.createInstanceWithContext(
+    "com.sun.star.bridge.UnoUrlResolver", localContext)
+ctx = resolver.resolve(
+    "uno:socket,host=localhost,port=2002;urp;StarOffice.ComponentContext")
+smgr = ctx.ServiceManager
+desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
+
+url = uno.systemPathToFileUrl(input_path)
+props = []
+p = PropertyValue()
+p.Name = "Hidden"
+p.Value = True
+props.append(p)
+p2 = PropertyValue()
+p2.Name = "FilterName"
+p2.Value = import_filter
+props.append(p2)
+
+doc = desktop.loadComponentFromURL(url, "_blank", 0, tuple(props))
+if not doc:
+    print(f"ERROR: Failed to load {input_path}", file=sys.stderr)
+    sys.exit(1)
+
+out_url = uno.systemPathToFileUrl(output_path)
+out_props = []
+p = PropertyValue()
+p.Name = "FilterName"
+p.Value = "writer_pdf_Export"
+out_props.append(p)
+p2 = PropertyValue()
+p2.Name = "Overwrite"
+p2.Value = True
+out_props.append(p2)
+
+doc.storeToURL(out_url, tuple(out_props))
+doc.close(True)
+print("OK")
+'''
+
 
 # 全局监听进程缓存
 _listener_process = None
