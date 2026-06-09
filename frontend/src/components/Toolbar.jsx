@@ -20,8 +20,91 @@ function Toolbar({
   onAddImage,
   onDelete,
   onPropertyChange,
+  // 新增：局部样式回调
+  onInlineStyleChange,
+  // 新增：当前编辑状态
+  editingState,
 }) {
   const fileInputRef = useRef(null);
+
+  // 检测是否正在编辑文本
+  const isEditingText = editingState?.isEditing && editingState?.hasSelection;
+
+  // 如果正在编辑且有选中文字，显示局部样式工具
+  if (isEditingText) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-200 overflow-x-auto">
+        <span className="text-xs text-blue-600 font-medium">选中文字样式:</span>
+
+        {/* 粗体 */}
+        <button
+          onClick={() => onInlineStyleChange?.('bold')}
+          className={`px-2 py-1 rounded text-sm font-bold ${
+            editingState?.activeStyles?.bold
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          } cursor-pointer`}
+          title="粗体"
+        >
+          B
+        </button>
+
+        {/* 斜体 */}
+        <button
+          onClick={() => onInlineStyleChange?.('italic')}
+          className={`px-2 py-1 rounded text-sm italic ${
+            editingState?.activeStyles?.italic
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          } cursor-pointer`}
+          title="斜体"
+        >
+          I
+        </button>
+
+        {/* 下划线 */}
+        <button
+          onClick={() => onInlineStyleChange?.('underline')}
+          className={`px-2 py-1 rounded text-sm underline ${
+            editingState?.activeStyles?.underline
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          } cursor-pointer`}
+          title="下划线"
+        >
+          U
+        </button>
+
+        {/* 删除线 */}
+        <button
+          onClick={() => onInlineStyleChange?.('strikethrough')}
+          className={`px-2 py-1 rounded text-sm line-through ${
+            editingState?.activeStyles?.strikethrough
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          } cursor-pointer`}
+          title="删除线"
+        >
+          S
+        </button>
+
+        <div className="w-px h-6 bg-gray-300 mx-1" />
+
+        {/* 颜色 */}
+        <input
+          type="color"
+          value={editingState?.activeStyles?.color || '#000000'}
+          onChange={(e) => onInlineStyleChange?.('color', e.target.value)}
+          className="w-8 h-8 border border-gray-300 rounded cursor-pointer"
+          title="文字颜色"
+        />
+
+        <div className="flex-1" />
+
+        <span className="text-xs text-gray-500">选择文字后可修改局部样式</span>
+      </div>
+    );
+  }
 
   if (!selectionSnapshot) {
     return (

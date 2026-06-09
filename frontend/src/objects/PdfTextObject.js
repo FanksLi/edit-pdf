@@ -1,5 +1,11 @@
 import { Rect, classRegistry } from 'fabric';
 
+/**
+ * PdfTextObject - PDF 文本段落对象
+ *
+ * 作为 Fabric.js 的交互层，管理位置、尺寸和选择框
+ * 实际文本渲染由 TipTap 编辑器完成
+ */
 class PdfTextObject extends Rect {
   static type = 'PdfText';
 
@@ -33,6 +39,8 @@ class PdfTextObject extends Rect {
 
     // 删除旋转控制点
     delete this.controls.mtr;
+
+    // 文本属性
     this.text = options.text || '';
     this.fontSize = options.fontSize || 16;
     this.fontFamily = options.fontFamily || 'Arial';
@@ -41,9 +49,16 @@ class PdfTextObject extends Rect {
     this.color = options.color || '#000000';
     this.lineHeight = options.lineHeight || 1.2;
     this.textAlign = options.textAlign || 'left';
-    this._textElement = null;
+
+    // TipTap 编辑器引用
+    this._editorRef = null;
     this._editing = false;
+
+    // PDF 数据
     this._pdfData = options._pdfData || null;
+
+    // 富文本内容（HTML 或 JSON）
+    this._richContent = options._richContent || null;
   }
 
   _render(ctx) {
@@ -59,100 +74,205 @@ class PdfTextObject extends Rect {
     };
   }
 
-  bindElement(el) {
-    this._textElement = el;
+  /**
+   * 绑定 TipTap 编辑器引用
+   * @param {Object} editorRef - TipTap 编辑器的 ref 对象
+   */
+  bindEditor(editorRef) {
+    this._editorRef = editorRef;
     this.syncToDOM();
   }
 
+  /**
+   * 同步位置和尺寸到 DOM
+   */
   syncToDOM() {
-    const el = this._textElement;
-    if (!el) return;
+    // 直接更新 TipTap wrapper 容器（_tipTapContainer）
+    const container = this._tipTapContainer;
+    if (!container) return;
+
     const tl = this.topLeft;
-    el.style.left = `${tl.x}px`;
-    el.style.top = `${tl.y}px`;
-    el.style.width = `${this.width * (this.scaleX || 1)}px`;
-    el.style.height = `${this.height * (this.scaleY || 1)}px`;
+    const w = this.width * (this.scaleX || 1);
+    const h = this.height * (this.scaleY || 1);
+    container.style.left = `${tl.x}px`;
+    container.style.top = `${tl.y}px`;
+    container.style.width = `${w}px`;
+    container.style.minHeight = `${h}px`;
+
+    // 同步 TipTap 编辑器元素宽度和溢出设置
+    const editorEl = this._editorRef?.current?.getEditor?.()?.options?.element;
+    if (editorEl) {
+      editorEl.style.width = `${w}px`;
+      editorEl.style.minHeight = `${h}px`;
+      editorEl.style.overflow = 'visible';
+    }
   }
 
+  /**
+   * 进入编辑模式
+   */
   enterEditing() {
     if (this._editing) return;
     this._editing = true;
     this._originalHeight = this.height;
+
+    // 锁定 Fabric 对象的交互
     this.lockMovementX = true;
     this.lockMovementY = true;
     this.lockScalingX = true;
     this.lockScalingY = true;
     this.lockRotation = true;
     this.hasControls = false;
-    const el = this._textElement;
-    if (el) {
-      el.style.pointerEvents = 'auto';
-      el.style.overflow = 'visible';
-      el.style.height = 'auto';
-      el.style.background = 'rgba(59,130,246,0.05)';
-      el.contentEditable = 'plaintext-only';
-      el.focus();
-      const range = document.createRange();
-      const sel = window.getSelection();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
+
+    // 激活 TipTap 编辑器
+    if (this._editorRef?.current) {
+      this._editorRef.current.enterEditing();
+
+      // 设置容器可交互
+      const containerEl = this._editorRef.current?.getEditor?.()?.options?.element?.parentElement;
+      if (containerEl) {
+        containerEl.style.pointerEvents = 'auto';
+        containerEl.style.overflow = 'visible';
+        containerEl.style.background = 'rgba(59,130,246,0.05)';
+      }
     }
   }
 
+  /**
+   * 退出编辑模式
+   */
   exitEditing() {
     if (!this._editing) return;
     this._editing = false;
+
+    // 解锁 Fabric 对象的交互
     this.lockMovementX = false;
     this.lockMovementY = false;
     this.lockScalingX = false;
     this.lockScalingY = false;
     this.lockRotation = false;
     this.hasControls = true;
-    const el = this._textElement;
-    if (el) {
-      this.text = el.innerText || '';
-      el.style.pointerEvents = 'none';
-      el.style.overflow = 'visible';
-      el.style.background = 'transparent';
-      el.contentEditable = 'false';
-      // Update height to match actual content, keeping top edge fixed
-      const scrollH = el.scrollHeight;
+
+    // 退出 TipTap 编辑器
+    if (this._editorRef?.current) {
+      // 获取编辑后的内容
+      this.text = this._editorRef.current.getText() || '';
+      this._richContent = this._editorRef.current.getJSON();
+
+      this._editorRef.current.exitEditing();
+
+      // 设置容器不可交互
+      const containerEl = this._editorRef.current?.getEditor?.()?.options?.element?.parentElement;
+      if (containerEl) {
+        containerEl.style.pointerEvents = 'none';
+        containerEl.style.overflow = 'visible';
+        containerEl.style.background = 'transparent';
+      }
+
+      // 更新高度以匹配实际内容，保持顶部边缘固定
+      const scrollH = containerEl?.scrollHeight || this.height;
       if (scrollH !== this.height) {
-        // 高度变化时，调整 top 保持顶部边缘固定
-        // 因为 originY 是 center，top 是中心点坐标
-        // 新的中心点 = 原中心点 + (新高度 - 原高度) / 2
         const heightDelta = scrollH - this.height;
         this.set('height', scrollH);
         this.set('top', this.top + heightDelta / 2);
         this.setCoords();
       }
     }
+
     delete this._originalHeight;
     this.syncToDOM();
   }
 
-  /** Grow the Fabric object to match DOM element scrollHeight during editing */
+  /**
+   * 同步编辑器高度和宽度（编辑时调用）
+   */
   syncHeight() {
-    const el = this._textElement;
-    if (!el || !this._editing) return;
-    const scrollH = el.scrollHeight;
+    if (!this._tipTapContainer) return;
+
+    const editorEl = this._editorRef?.current?.getEditor?.()?.options?.element;
+    if (!editorEl) return;
+
+    const scrollH = editorEl.scrollHeight;
     const origH = this._originalHeight || this.height;
+
+    // 高度增加时更新
     if (scrollH > origH) {
-      // Keep top edge fixed: adjust center downward by half the growth
       const growth = scrollH - this.height;
       this.set({ height: scrollH, top: this.top + growth / 2 });
-      this.setCoords();
-      this.canvas?.requestRenderAll();
+      this._tipTapContainer.style.minHeight = `${scrollH}px`;
+    }
+
+    // 测量实际内容宽度
+    let maxLineWidth = 0;
+    const doc = this._editorRef?.current?.getEditor?.()?.state?.doc;
+    if (doc) {
+      doc.descendants((node) => {
+        if (node.isText && node.text) {
+          const span = document.createElement('span');
+          span.style.cssText = `
+            position: absolute;
+            visibility: hidden;
+            white-space: pre;
+            font-size: ${editorEl.style.fontSize};
+            font-family: ${editorEl.style.fontFamily};
+            font-weight: ${editorEl.style.fontWeight};
+            font-style: ${editorEl.style.fontStyle};
+          `;
+          span.textContent = node.text;
+          document.body.appendChild(span);
+          const w = span.offsetWidth;
+          document.body.removeChild(span);
+          if (w > maxLineWidth) maxLineWidth = w;
+        }
+      });
+    }
+
+    // 宽度超出时更新
+    const currentWidth = this.width * (this.scaleX || 1);
+    if (maxLineWidth > currentWidth) {
+      const newWidth = maxLineWidth + 8; // 加 padding
+      this.set({ width: newWidth });
+      this._tipTapContainer.style.width = `${newWidth}px`;
+    }
+
+    this.setCoords();
+    this.canvas?.requestRenderAll();
+  }
+
+  /**
+   * 获取文本内容
+   */
+  getText() {
+    if (this._editorRef?.current) {
+      return this._editorRef.current.getText() || this.text;
+    }
+    return this.text;
+  }
+
+  /**
+   * 获取富文本内容（JSON 格式）
+   */
+  getRichContent() {
+    if (this._editorRef?.current) {
+      return this._editorRef.current.getJSON();
+    }
+    return this._richContent;
+  }
+
+  /**
+   * 设置富文本内容
+   */
+  setRichContent(json) {
+    this._richContent = json;
+    if (this._editorRef?.current) {
+      // 使用 TipTap 的 setContent 命令来更新内容
+      this._editorRef.current.setContent(json);
     }
   }
 
-  getText() {
-    return this._textElement?.innerText || this.text;
-  }
-
-  /** Get scaled bounding box in top-left coordinates */
+  /**
+   * 获取缩放后的边界框（左上角坐标）
+   */
   getBounding() {
     const tl = this.topLeft;
     return {
@@ -163,57 +283,48 @@ class PdfTextObject extends Rect {
     };
   }
 
+  /**
+   * 更新属性
+   */
   updateProperty(prop, value) {
-    const el = this._textElement;
+    const editorRef = this._editorRef?.current;
+
     switch (prop) {
       case 'fontFamily':
         this.fontFamily = value;
-        if (el) el.style.fontFamily = value;
+        if (editorRef) {
+          editorRef.applyStyle('fontFamily', value);
+        }
         break;
       case 'fontSize':
         this.fontSize = value;
-        if (el) {
-          el.style.fontSize = `${value}px`;
-          // Remove fixed dimensions temporarily to measure actual content size
-          const savedWidth = el.style.width;
-          const savedHeight = el.style.height;
-          el.style.width = 'auto';
-          el.style.height = 'auto';
-          el.style.whiteSpace = 'nowrap';
-
-          // Wait for DOM to update then adjust width and height
-          requestAnimationFrame(() => {
-            const actualW = el.offsetWidth;
-            const actualH = el.offsetHeight;
-            // Restore dimensions with new values
-            el.style.width = `${actualW}px`;
-            el.style.height = `${actualH}px`;
-            el.style.whiteSpace = 'pre';
-
-            if (actualW > 0 && actualH > 0) {
-              this.set({ width: actualW, height: actualH });
-              this.syncToDOM(); // Sync DOM position after size change
-              this.setCoords();
-              this.canvas?.requestRenderAll();
-            }
-          });
+        if (editorRef) {
+          editorRef.applyStyle('fontSize', value);
         }
         break;
       case 'fontWeight':
         this.fontWeight = value;
-        if (el) el.style.fontWeight = value;
+        if (editorRef) {
+          editorRef.applyStyle('fontWeight', value);
+        }
         break;
       case 'fontStyle':
         this.fontStyle = value;
-        if (el) el.style.fontStyle = value;
+        if (editorRef) {
+          editorRef.applyStyle('fontStyle', value);
+        }
         break;
       case 'fill':
         this.color = value;
-        if (el) el.style.color = value;
+        if (editorRef) {
+          editorRef.applyStyle('color', value);
+        }
         break;
       case 'textAlign':
         this.textAlign = value;
-        if (el) el.style.textAlign = value;
+        if (editorRef) {
+          editorRef.applyStyle('textAlign', value);
+        }
         break;
       case 'scaleX':
         this.set('scaleX', value);
@@ -223,16 +334,61 @@ class PdfTextObject extends Rect {
         this.set('scaleY', value);
         this.syncToDOM();
         break;
+      // TipTap 样式
+      case 'bold':
+      case 'italic':
+      case 'underline':
+      case 'strikethrough':
+        if (editorRef) {
+          editorRef.applyStyle(prop, value);
+        }
+        break;
     }
+
     this.setCoords();
     this.canvas?.requestRenderAll();
   }
 
-  destroy() {
-    if (this._textElement) {
-      this._textElement.remove();
-      this._textElement = null;
+  /**
+   * 应用样式到选中文字
+   */
+  applyStyleToSelection(style, value) {
+    if (this._editorRef?.current) {
+      this._editorRef.current.applyStyle(style, value);
     }
+  }
+
+  /**
+   * 获取当前选中的样式
+   */
+  getActiveStyles() {
+    if (this._editorRef?.current) {
+      return this._editorRef.current.getActiveStyles();
+    }
+    return {};
+  }
+
+  /**
+   * 检查是否有选中文字
+   */
+  hasSelection() {
+    if (this._editorRef?.current) {
+      return this._editorRef.current.hasSelection();
+    }
+    return false;
+  }
+
+  /**
+   * 销毁对象
+   */
+  destroy() {
+    if (this._editorRef?.current) {
+      const editor = this._editorRef.current.getEditor?.();
+      if (editor) {
+        editor.destroy();
+      }
+    }
+    this._editorRef = null;
   }
 }
 

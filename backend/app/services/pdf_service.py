@@ -90,22 +90,95 @@ class PDFService:
                 if not spans:
                     continue
                 first = spans[0]
-                color_int = first.get("color", 0)
+
+                # 调试：打印原始 span 颜色信息
+                if len(spans) > 1:
+                    span_colors = [(s.get("text", "")[:20], hex(s.get("color", 0))) for s in spans]
+                    print(f"[DEBUG] Line with {len(spans)} spans: {span_colors}")
+
+                # 收集所有 span 的颜色，找到最常见的颜色作为基础颜色
+                color_counts = {}
+                for s in spans:
+                    s_color_int = s.get("color", 0)
+                    s_text = s.get("text", "")
+                    s_len = len(s_text)
+                    if s_color_int not in color_counts:
+                        color_counts[s_color_int] = 0
+                    color_counts[s_color_int] += s_len
+
+                # 选择字符数最多的颜色作为基础颜色
+                dominant_color_int = max(color_counts, key=color_counts.get) if color_counts else first.get("color", 0)
+                base_color = [
+                    ((dominant_color_int >> 16) & 0xFF) / 255,
+                    ((dominant_color_int >> 8) & 0xFF) / 255,
+                    (dominant_color_int & 0xFF) / 255,
+                ]
+
+                # 检测行内是否有不同颜色/字号/字体的 span
+                inline_spans = []
+                has_style_variation = False
+                char_offset = 0
+                base_font_size = self._dominant_font_size(spans)
+
+                # 计算占多数的字体名（类似字号处理）
+                font_name_counts = {}
+                for s in spans:
+                    s_font = s.get("font", "")
+                    s_len = len(s.get("text", ""))
+                    if s_font not in font_name_counts:
+                        font_name_counts[s_font] = 0
+                    font_name_counts[s_font] += s_len
+                base_font_name = max(font_name_counts, key=font_name_counts.get) if font_name_counts else first.get("font", "")
+
+                for s in spans:
+                    s_color_int = s.get("color", 0)
+                    s_color = [
+                        ((s_color_int >> 16) & 0xFF) / 255,
+                        ((s_color_int >> 8) & 0xFF) / 255,
+                        (s_color_int & 0xFF) / 255,
+                    ]
+                    s_text = s.get("text", "")
+                    s_len = len(s_text)
+                    s_font_size = s.get("size", base_font_size)
+                    s_font_name = s.get("font", base_font_name)
+
+                    # 检查颜色、字号、字体是否与基础样式不同
+                    color_diff = any(abs(s_color[i] - base_color[i]) > 0.01 for i in range(3))
+                    font_size_diff = abs(s_font_size - base_font_size) > 0.5
+                    font_name_diff = s_font_name != base_font_name
+
+                    if color_diff or font_size_diff or font_name_diff:
+                        has_style_variation = True
+                        style_span = {
+                            "start": char_offset,
+                            "end": char_offset + s_len,
+                        }
+                        if color_diff:
+                            style_span["color"] = s_color
+                        if font_size_diff:
+                            style_span["fontSize"] = s_font_size
+                        if font_name_diff:
+                            # 清理字体名（去掉 PDF 子集前缀）
+                            clean_font = s_font_name.split("+", 1)[-1] if "+" in s_font_name else s_font_name
+                            style_span["fontFamily"] = clean_font
+                        inline_spans.append(style_span)
+
+                    char_offset += s_len
+
                 flat_lines.append({
                     "text": "".join(s["text"] for s in spans).strip(),
                     "y0": first["bbox"][1],
-                    "fontSize": self._dominant_font_size(spans),
-                    "fontName": first["font"],
-                    "color": [
-                        ((color_int >> 16) & 0xFF) / 255,
-                        ((color_int >> 8) & 0xFF) / 255,
-                        (color_int & 0xFF) / 255,
-                    ],
+                    "fontSize": base_font_size,
+                    "fontName": base_font_name,
+                    "color": base_color,
                     "spans_bboxes": [s["bbox"] for s in spans],
                     "block_idx": block_idx,
                     "x0": spans[0]["bbox"][0],
                     "x1": spans[-1]["bbox"][2],
+                    "inlineSpans": inline_spans if has_style_variation else None,
                 })
+                if has_style_variation:
+                    print(f"[DEBUG] flat_line with inlineSpans: text[:30]={flat_lines[-1]['text'][:30]}, inlineSpans={inline_spans}")
 
         if not flat_lines:
             return []
@@ -196,6 +269,56 @@ class PDFService:
 
         result = []
         for group in para_groups:
+            # 合并所有行的 inlineSpans，转换为全局偏移
+            all_inline_spans = []
+            char_offset = 0
+
+            # 收集所有行的颜色统计，计算整段的主色调
+            para_color_counts = {}
+            for line in group:
+                line_text = line["text"].rstrip()
+                # 调试：检查 line 中是否有 inlineSpans
+                if "inlineSpans" in line:
+                    print(f"[DEBUG] line has inlineSpans key: text[:30]={line_text[:30]}, inlineSpans={line.get('inlineSpans')}")
+                # 从原始 spans 重新统计颜色（只有带 color 字段的才计入）
+                if line.get("inlineSpans"):
+                    for span in line["inlineSpans"]:
+                        span_len = span["end"] - span["start"]
+                        # 只有有 color 字段的才计入颜色统计
+                        if "color" in span:
+                            color_key = tuple(span["color"])
+                            if color_key not in para_color_counts:
+                                para_color_counts[color_key] = 0
+                            para_color_counts[color_key] += span_len
+                # 基础颜色的字符数（减去有 color 字段的 span）
+                base_len = len(line_text)
+                if line.get("inlineSpans"):
+                    for span in line["inlineSpans"]:
+                        # 只有带 color 的 span 才减去（无 color 的使用基础颜色）
+                        if "color" in span:
+                            base_len -= (span["end"] - span["start"])
+                if base_len > 0:
+                    color_key = tuple(line["color"])
+                    if color_key not in para_color_counts:
+                        para_color_counts[color_key] = 0
+                    para_color_counts[color_key] += base_len
+
+                # 收集 inlineSpans（保留所有样式字段）
+                if line.get("inlineSpans"):
+                    for span in line["inlineSpans"]:
+                        new_span = {
+                            "start": char_offset + span["start"],
+                            "end": char_offset + span["end"],
+                        }
+                        if "color" in span:
+                            new_span["color"] = span["color"]
+                        if "fontSize" in span:
+                            new_span["fontSize"] = span["fontSize"]
+                        if "fontFamily" in span:
+                            new_span["fontFamily"] = span["fontFamily"]
+                        all_inline_spans.append(new_span)
+                char_offset += len(line_text) + 1  # +1 for newline
+
             text = "\n".join(l["text"].rstrip() for l in group).strip()
 
             all_bb = [bb for l in group for bb in l["spans_bboxes"]]
@@ -205,6 +328,29 @@ class PDFService:
             y1 = max(b[3] for b in all_bb)
 
             rep = group[0]
+
+            # 计算段落级主色调（字符数最多的颜色）
+            if para_color_counts:
+                dominant_color = max(para_color_counts, key=para_color_counts.get)
+                base_color = list(dominant_color)
+            else:
+                base_color = rep["color"]
+
+            # 更新 inlineSpans：排除与主色调相同的（但保留字号和字体变化）
+            filtered_inline_spans = []
+            for span in all_inline_spans:
+                # 检查是否有字号或字体变化（这些必须保留）
+                has_font_size = "fontSize" in span
+                has_font_family = "fontFamily" in span
+                # 检查颜色是否与主色调不同
+                has_color_diff = False
+                if "color" in span:
+                    span_color = span["color"]
+                    has_color_diff = any(abs(span_color[i] - base_color[i]) > 0.01 for i in range(3))
+
+                # 保留有实际样式变化的 span
+                if has_color_diff or has_font_size or has_font_family:
+                    filtered_inline_spans.append(span)
 
             # lineHeight: 优先用组内实际间距，fallback 到全局 median
             if len(group) >= 2:
@@ -216,15 +362,27 @@ class PDFService:
             # z_index: 用组内第一行所在原始 block 的索引
             z_index = min(l.get("block_idx", 0) for l in group)
 
-            result.append({
+            para_data = {
                 "text": text,
                 "bbox": [x0, y0, x1, y1],
                 "fontSize": rep["fontSize"],
                 "fontName": rep["fontName"],
-                "color": rep["color"],
+                "color": base_color,
                 "lineHeight": lh,
                 "z_index": z_index,
-            })
+            }
+
+            # 只在有内联样式时添加 inlineSpans
+            if filtered_inline_spans:
+                para_data["inlineSpans"] = filtered_inline_spans
+                print(f"[DEBUG] Adding inlineSpans to para_data: {filtered_inline_spans}")
+
+            result.append(para_data)
+
+        # 调试：检查 result 中是否有 inlineSpans
+        for p in result:
+            if p.get("inlineSpans"):
+                print(f"[DEBUG] result has inlineSpans: id={p.get('text', '')[:30]}, inlineSpans={p.get('inlineSpans')}")
 
         return result
 
@@ -609,6 +767,11 @@ class PDFService:
 
         # 检测对齐方式（使用新的 cell 信息）
         paragraphs = self._detect_cell_alignment(paragraphs, drawings)
+
+        # 调试：检查 inlineSpans 是否还在
+        for p in paragraphs:
+            if p.get("inlineSpans"):
+                print(f"[DEBUG] After alignment, inlineSpans exists: text[:30]={p.get('text', '')[:30]}")
 
         # 过滤掉属于表格的填充矩形（单元格背景），但保留线条
         table_fill_rects = set()
@@ -1172,8 +1335,10 @@ class PDFService:
             height_delta = p_edit.get("height_delta", 0)
             edited_para_bboxes.append(old_bbox)
             text_changed, position_changed = para_changed[id(p_edit)]
+            inline_styles = p_edit.get("inlineStyles", [])
+            has_inline_styles = len(inline_styles) > 0
 
-            if text_changed or position_changed:
+            if text_changed or position_changed or has_inline_styles:
                 edit_bboxes.append(old_bbox)
                 # 标记段落内的 span 为"故意删除"
                 for s in para_spans_map[id(p_edit)]:
@@ -1291,11 +1456,30 @@ class PDFService:
             text_changed, position_changed = para_changed[id(p_edit)]
             original_text = para_original_text[id(p_edit)]
 
-            if not position_changed and new_text_stripped == original_text:
-                continue
-
             font_size = p_edit.get("fontSize", 12)
             original_font_size = p_edit.get("originalFontSize", font_size)
+            font_size_changed = abs(font_size - original_font_size) > 0.1
+
+            # 检查颜色变化
+            new_color = p_edit.get("color")
+            color_changed = False
+            if new_color and "originalColor" in p_edit:
+                original_color = p_edit["originalColor"]
+                color_changed = any(abs(new_color[i] - original_color[i]) > 0.01 for i in range(3))
+
+            # 检查字体变化
+            font_name = p_edit.get("fontName", "")
+            original_font_name = p_edit.get("originalFontName", font_name)
+            font_name_changed = font_name != original_font_name
+
+            # 检查内联样式变化
+            inline_styles = p_edit.get("inlineStyles", [])
+            has_inline_styles = len(inline_styles) > 0
+
+            # 如果文字、位置、字体大小、颜色、字体、内联样式都没变化，跳过
+            if not position_changed and new_text_stripped == original_text and not font_size_changed and not color_changed and not font_name_changed and not has_inline_styles:
+                continue
+
             color = tuple(p_edit.get("color", (0, 0, 0)))
 
             # 根据字体大小变化动态调整行高
@@ -1325,20 +1509,55 @@ class PDFService:
                 if first_baseline_y is None:
                     first_baseline_y = old_bbox.y0 + font_size * 0.85
 
-            for i, line in enumerate(p_edit["newText"].split('\n')):
-                if not line:
-                    continue
-                y = first_baseline_y + i * line_height
-                text_align = p_edit.get("textAlign", "left")
-                if text_align == "left" or target_bbox.width < 5:
-                    self.font_mgr.insert_text_line(page, target_bbox.x0, y, line,
-                                                   original_font, font_size, color)
-                else:
-                    rect = fitz.Rect(target_bbox.x0, y - font_size, target_bbox.x1, y + font_size * 0.5)
-                    align = 1 if text_align == "center" else 2
-                    self.font_mgr.insert_textbox(page, rect, line,
-                                                 font_name=original_font,
-                                                 font_size=font_size, color=color, align=align)
+            # 当有 new_bbox 时，使用 textbox 自动换行（但不支持内联样式）
+            # 如果有内联样式，需要逐行插入
+            if new_bbox and not inline_styles:
+                # 计算文本框高度（根据行数预估）
+                lines = p_edit["newText"].split('\n')
+                num_lines = len([l for l in lines if l.strip()])
+                # 预估高度，给足够的空间让文本自动换行
+                estimated_height = max(target_bbox.height, num_lines * line_height + font_size)
+                rect = fitz.Rect(target_bbox.x0, target_bbox.y0, target_bbox.x1, target_bbox.y0 + estimated_height)
+
+                # 使用 insert_textbox 自动换行，传递行高
+                self.font_mgr.insert_textbox(page, rect, p_edit["newText"],
+                                             font_name=original_font,
+                                             font_size=font_size, color=color, align=0,
+                                             line_height=line_height)
+            else:
+                # 原有逻辑：按 \n 分割逐行插入
+                for i, line in enumerate(p_edit["newText"].split('\n')):
+                    if not line:
+                        continue
+                    y = first_baseline_y + i * line_height
+                    text_align = p_edit.get("textAlign", "left")
+                    if text_align == "left" or target_bbox.width < 5:
+                        if inline_styles:
+                            # 过滤出当前行的内联样式
+                            line_start = sum(len(l) + 1 for l in p_edit["newText"].split('\n')[:i])
+                            line_end = line_start + len(line)
+                            line_styles = []
+                            for s in inline_styles:
+                                # 样式范围与当前行有交集
+                                if s.get('end', 0) > line_start and s.get('start', 0) < line_end:
+                                    # 调整样式位置为行内偏移
+                                    adjusted = dict(s)
+                                    adjusted['start'] = max(0, s.get('start', 0) - line_start)
+                                    adjusted['end'] = min(len(line), s.get('end', len(line)) - line_start)
+                                    if adjusted['end'] > adjusted['start']:
+                                        line_styles.append(adjusted)
+                            self.font_mgr.insert_text_line_with_styles(
+                                page, target_bbox.x0, y, line,
+                                original_font, font_size, color, line_styles if line_styles else None)
+                        else:
+                            self.font_mgr.insert_text_line(page, target_bbox.x0, y, line,
+                                                           original_font, font_size, color)
+                    else:
+                        rect = fitz.Rect(target_bbox.x0, y - font_size, target_bbox.x1, y + font_size * 0.5)
+                        align = 1 if text_align == "center" else 2
+                        self.font_mgr.insert_textbox(page, rect, line,
+                                                     font_name=original_font,
+                                                     font_size=font_size, color=color, align=align)
 
         # 13. 插入位移文字
         for span, delta in shifted_spans:

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { createRoot } from 'react-dom/client';
 import { Canvas, FabricImage, Rect, ActiveSelection, Line } from 'fabric';
 import PdfTextObject from '../objects/PdfTextObject';
+import TipTapEditor from './TipTapEditor';
 import { pdfToCanvas, canvasToPdf } from '../utils/coordinate';
 import { getPageText, getPageRender } from '../services/api';
 import useCanvasStore from '../stores/canvasStore';
@@ -28,6 +30,172 @@ function resolvePdfFont(pdfFontName) {
     fontFamily: `${cssFamily}, 'Liberation_Serif', serif`,
     fontWeight: isBold ? 'bold' : 'normal',
     fontStyle: isItalic ? 'italic' : 'normal',
+  };
+}
+
+/**
+ * 将 TipTap JSON 转换为后端 inlineStyles 格式
+ * @param {Object} richContent - TipTap getJSON() 返回的对象
+ * @param {Object} baseStyles - 基础样式 { color, fontSize }
+ * @returns {Array} inlineStyles 数组
+ */
+function convertTipTapToInlineStyles(richContent, baseStyles = {}, scale = 1) {
+  if (!richContent || richContent.type !== 'doc') return [];
+
+  const inlineStyles = [];
+  let charIndex = 0;
+
+  // 遍历文档内容
+  for (const block of richContent.content || []) {
+    if (block.type !== 'paragraph') continue;
+
+    for (const node of block.content || []) {
+      if (node.type !== 'text') continue;
+
+      const textLength = node.text?.length || 0;
+      const start = charIndex;
+      const end = charIndex + textLength;
+
+      // 解析 marks（样式标记）
+      if (node.marks && node.marks.length > 0) {
+        const style = { start, end };
+
+        for (const mark of node.marks) {
+          if (mark.type === 'bold') {
+            style.bold = true;
+          } else if (mark.type === 'italic') {
+            style.italic = true;
+          } else if (mark.type === 'underline') {
+            style.underline = true;
+          } else if (mark.type === 'strike') {
+            style.strikethrough = true;
+          } else if (mark.type === 'textStyle' && mark.attrs) {
+            // 颜色
+            if (mark.attrs.color) {
+              // 解析颜色：#ff0000 或 rgb(255,0,0)
+              const colorStr = mark.attrs.color;
+              if (colorStr.startsWith('#')) {
+                const hex = colorStr.slice(1);
+                style.color = [
+                  parseInt(hex.slice(0, 2), 16) / 255,
+                  parseInt(hex.slice(2, 4), 16) / 255,
+                  parseInt(hex.slice(4, 6), 16) / 255,
+                ];
+              } else if (colorStr.startsWith('rgb(')) {
+                const match = colorStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+                if (match) {
+                  style.color = [
+                    parseInt(match[1]) / 255,
+                    parseInt(match[2]) / 255,
+                    parseInt(match[3]) / 255,
+                  ];
+                }
+              }
+            }
+            // 字号（px 转 pt，保留一位小数）
+            if (mark.attrs.fontSize) {
+              const sizeStr = mark.attrs.fontSize;
+              const sizeMatch = sizeStr.match(/(\d+(?:\.\d+)?)/);
+              if (sizeMatch) {
+                // TipTap 存的是 px 值，后端需要 pt 值
+                const ptValue = parseFloat(sizeMatch[1]) / scale;
+                style.fontSize = Math.round(ptValue * 10) / 10;
+              }
+            }
+            // 字体
+            if (mark.attrs.fontFamily) {
+              style.fontFamily = mark.attrs.fontFamily;
+            }
+          }
+        }
+
+        // 只添加有实际样式变化的条目
+        if (style.bold || style.italic || style.underline || style.strikethrough
+            || style.color || style.fontSize || style.fontFamily) {
+          inlineStyles.push(style);
+        }
+      }
+
+      charIndex += textLength;
+    }
+  }
+
+  return inlineStyles;
+}
+
+/**
+ * 将后端 inlineSpans 转换为 TipTap JSON 内容
+ * @param {string} text - 纯文本内容
+ * @param {Array} inlineSpans - 后端返回的内联样式数组
+ * @param {number} scale - 用于 fontSize pt 转 px
+ * @returns {Object} TipTap JSON 文档
+ */
+function convertInlineSpansToTipTap(text, inlineSpans, scale = 1) {
+  if (!inlineSpans || inlineSpans.length === 0) {
+    return {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text }],
+      }],
+    };
+  }
+
+  // 按 start 排序
+  const sortedSpans = [...inlineSpans].sort((a, b) => a.start - b.start);
+  const textNodes = [];
+  let currentPos = 0;
+
+  for (const span of sortedSpans) {
+    const start = span.start;
+    const end = Math.min(span.end, text.length);
+
+    // 样式前的普通文本
+    if (start > currentPos) {
+      textNodes.push({ type: 'text', text: text.slice(currentPos, start) });
+    }
+
+    // 带样式的文本
+    if (end > start) {
+      const node = { type: 'text', text: text.slice(start, end) };
+      const marks = [];
+
+      // 颜色
+      if (span.color) {
+        const r = Math.round(span.color[0] * 255);
+        const g = Math.round(span.color[1] * 255);
+        const b = Math.round(span.color[2] * 255);
+        marks.push({ type: 'textStyle', attrs: { color: `rgb(${r},${g},${b})` } });
+      }
+
+      // 字号（pt 转 px）
+      if (span.fontSize) {
+        const fontSizePx = Math.round(span.fontSize * scale * 10) / 10;
+        marks.push({ type: 'textStyle', attrs: { fontSize: `${fontSizePx}px` } });
+      }
+
+      // 字体
+      if (span.fontFamily) {
+        marks.push({ type: 'textStyle', attrs: { fontFamily: span.fontFamily } });
+      }
+
+      if (marks.length > 0) {
+        node.marks = marks;
+      }
+      textNodes.push(node);
+    }
+
+    currentPos = end;
+  }
+
+  // 剩余文本
+  if (currentPos < text.length) {
+    textNodes.push({ type: 'text', text: text.slice(currentPos) });
+  }
+
+  return {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: textNodes }],
   };
 }
 
@@ -92,51 +260,71 @@ const FabricCanvas = forwardRef(function FabricCanvas(
           const b = obj.getBounding();
           const newBbox = canvasToPdf(b.left, b.top, b.width, b.height, SCALE);
           const textChanged = currentText !== pdf.originalText;
+
+          // 检测位置变化（x, y）
           const posChanged = Math.abs(newBbox[0] - pdf.originalBbox[0]) > 0.5
             || Math.abs(newBbox[1] - pdf.originalBbox[1]) > 0.5;
 
+          // 检测尺寸变化（宽度、高度）
+          const sizeChanged = Math.abs(newBbox[2] - pdf.originalBbox[2]) > 0.5
+            || Math.abs(newBbox[3] - pdf.originalBbox[3]) > 0.5;
+
           let newColor = [...pdf.originalColor];
           let colorChanged = false;
-          if (obj.color && obj.color.startsWith('rgb(')) {
-            const match = obj.color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-            if (match) {
-              const r = parseInt(match[1]) / 255;
-              const g = parseInt(match[2]) / 255;
-              const b = parseInt(match[3]) / 255;
+          if (obj.color) {
+            // 支持 rgb(...) 和 #xxxxxx 格式
+            if (obj.color.startsWith('rgb(')) {
+              const match = obj.color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+              if (match) {
+                const r = parseInt(match[1]) / 255;
+                const g = parseInt(match[2]) / 255;
+                const b = parseInt(match[3]) / 255;
+                newColor = [r, g, b];
+                colorChanged = pdf.originalColor.some((v, i) => Math.abs(newColor[i] - v) > 0.01);
+              }
+            } else if (obj.color.startsWith('#')) {
+              // 解析 #xxxxxx 格式
+              const hex = obj.color.slice(1);
+              const r = parseInt(hex.slice(0, 2), 16) / 255;
+              const g = parseInt(hex.slice(2, 4), 16) / 255;
+              const b = parseInt(hex.slice(4, 6), 16) / 255;
               newColor = [r, g, b];
               colorChanged = pdf.originalColor.some((v, i) => Math.abs(newColor[i] - v) > 0.01);
             }
           }
 
-          const sizeChanged = !posChanged && (
-            Math.abs(newBbox[2] - pdf.originalBbox[2]) > 0.5
-            || Math.abs(newBbox[3] - pdf.originalBbox[3]) > 0.5
-          );
-
           const currentFontSize = obj.fontSize / SCALE;
           const fontSizeChanged = Math.abs(currentFontSize - pdf.originalFontSize) > 0.1;
 
-          if (textChanged || posChanged || colorChanged || sizeChanged || fontSizeChanged) {
+          // 获取富文本内容（包含内联样式）
+          const richContent = obj.getRichContent();
+          // 转换为后端期望的 inlineStyles 格式
+          const inlineStyles = convertTipTapToInlineStyles(richContent, {}, SCALE);
+          // 检测是否有内联样式变化
+          const hasInlineStyles = inlineStyles.length > 0;
+
+          if (textChanged || posChanged || colorChanged || sizeChanged || fontSizeChanged || hasInlineStyles) {
             const originalLines = pdf.originalText.split('\n').length;
             const currentLines = currentText.split('\n').length;
             const lineCountDelta = currentLines - originalLines;
-            const newBottom = newBbox[3];
-            const oldBottom = pdf.originalBbox[3];
+            const newBottom = newBbox[1] + newBbox[3];
+            const oldBottom = pdf.originalBbox[1] + pdf.originalBbox[3];
             const textExpandDelta = lineCountDelta * pdf.lineHeight;
             const geoDelta = newBottom - oldBottom;
-            const heightDelta = posChanged ? Math.max(0, geoDelta, textExpandDelta) : 0;
+            const heightDelta = Math.max(0, geoDelta, textExpandDelta);
 
             paragraphEdits.push({
               bbox: pdf.originalBbox,
-              new_bbox: posChanged ? newBbox : undefined,
+              new_bbox: (posChanged || sizeChanged) ? newBbox : undefined,
               newText: currentText,
               fontSize: currentFontSize,
               originalFontSize: pdf.originalFontSize,
               fontName: pdf.originalFontName,
               color: newColor,
               originalColor: pdf.originalColor,
-              height_delta: Math.max(0, heightDelta),
+              height_delta: heightDelta,
               lineHeight: pdf.lineHeight,
+              inlineStyles: inlineStyles.length > 0 ? inlineStyles : undefined,
             });
           }
         } else if (pdf.xref !== undefined) {
@@ -219,34 +407,78 @@ const FabricCanvas = forwardRef(function FabricCanvas(
       // 将新添加的文字置于顶层
       canvas.bringObjectToFront(textObj);
 
-      const div = document.createElement('div');
-      div.style.cssText = `
+      // 创建 TipTap 编辑器容器
+      const tipTapContainer = document.createElement('div');
+      tipTapContainer.className = 'tiptap-wrapper';
+      tipTapContainer.style.cssText = `
         position: absolute;
         left: ${left}px;
         top: ${top}px;
         width: 200px;
-        height: 40px;
+        min-height: 40px;
         min-width: 10px;
-        font-size: 16px;
-        font-family: 'Roboto', Arial, sans-serif;
-        font-weight: normal;
-        font-style: normal;
-        line-height: 1.2;
-        color: #000000;
         background: transparent;
-        border: none;
-        outline: none;
-        padding: 0;
-        margin: 0;
-        white-space: pre;
-        overflow: visible;
         pointer-events: none;
         z-index: ${newZIndex};
       `;
-      div.innerText = '输入文字';
-      textLayer.appendChild(div);
-      textObj.bindElement(div);
-      _attachTextEvents(textObj, div);
+      tipTapContainer.dataset.textId = id;
+      textLayer.appendChild(tipTapContainer);
+
+      // 使用 createRoot 渲染 TipTap 组件
+      const editorRef = { current: null };
+      const root = createRoot(tipTapContainer);
+
+      const handleEditorReady = () => {
+        _attachTipTapEvents(textObj, editorRef);
+      };
+
+      const handleBlur = (text, html, richContent) => {
+        if (textObj._editing) {
+          textObj.exitEditing();
+
+          const canvasInstance = fabricRef.current;
+          if (canvasInstance) canvasInstance.requestRenderAll();
+
+          const textAfterEdit = textObj.getText();
+          const richContentAfterEdit = textObj.getRichContent();
+          const heightAfterEdit = textObj.height;
+          const objId = textObj._pdfData?.id || textObj._newId;
+          if (objId) {
+            isLocalUpdateRef.current = true;
+            const topLeft = textObj.topLeft;
+            updateObject(pageNum, objId, {
+              text: textAfterEdit,
+              richContent: richContentAfterEdit,
+              left: topLeft.x,
+              top: topLeft.y,
+              width: textObj.width,
+              height: heightAfterEdit,
+            });
+          }
+        }
+      };
+
+      root.render(
+        <TipTapEditor
+          ref={(el) => { editorRef.current = el; }}
+          content="输入文字"
+          fontSize={16}
+          fontFamily="'Roboto', Arial, sans-serif"
+          fontWeight="normal"
+          fontStyle="normal"
+          color="#000000"
+          textAlign="left"
+          lineHeight={1.2}
+          width={200}
+          height={40}
+          onEditorReady={handleEditorReady}
+          onBlur={handleBlur}
+        />
+      );
+
+      // 存储 root 引用以便清理
+      textObj._tipTapRoot = root;
+      textObj._tipTapContainer = tipTapContainer;
 
       canvas.setActiveObject(textObj);
       canvas.requestRenderAll();
@@ -345,6 +577,8 @@ const FabricCanvas = forwardRef(function FabricCanvas(
       color: isText ? obj.color : undefined,
       lineHeight: isText ? obj.lineHeight : undefined,
       textAlign: isText ? obj.textAlign : undefined,
+      // 富文本内容（TipTap JSON）
+      richContent: isText ? obj.getRichContent() : undefined,
       // 图片属性
       imageUrl: obj._pdfData?.imageUrl,
       imageId: obj._imageId,
@@ -386,15 +620,23 @@ const FabricCanvas = forwardRef(function FabricCanvas(
     return div;
   };
 
-  const _attachTextEvents = (textObj, div) => {
-    div.addEventListener('blur', () => {
-      if (textObj._editing) {
+  // ─── TipTap 编辑器事件处理 ────────────────────────────────────────────────────
+
+  const _attachTipTapEvents = (textObj, editorRef) => {
+    // 存储编辑器引用到 PdfTextObject
+    textObj.bindEditor(editorRef);
+
+    // 监听键盘事件
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && textObj._editing) {
+        e.preventDefault();
         textObj.exitEditing();
 
         const canvas = fabricRef.current;
         if (canvas) canvas.requestRenderAll();
 
         const textAfterEdit = textObj.getText();
+        const richContentAfterEdit = textObj.getRichContent();
         const heightAfterEdit = textObj.height;
         const objId = textObj._pdfData?.id || textObj._newId;
         if (objId) {
@@ -402,6 +644,7 @@ const FabricCanvas = forwardRef(function FabricCanvas(
           const topLeft = textObj.topLeft;
           updateObject(pageNum, objId, {
             text: textAfterEdit,
+            richContent: richContentAfterEdit,
             left: topLeft.x,
             top: topLeft.y,
             width: textObj.width,
@@ -409,20 +652,49 @@ const FabricCanvas = forwardRef(function FabricCanvas(
           });
         }
       }
-    });
+    };
 
-    div.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && textObj._editing) {
-        e.preventDefault();
-        div.blur();
-        return;
-      }
-      requestAnimationFrame(() => textObj.syncHeight());
-    });
+    window.addEventListener('keydown', handleKeyDown);
 
-    div.addEventListener('input', () => {
-      requestAnimationFrame(() => textObj.syncHeight());
-    });
+    // 返回清理函数
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  };
+
+  // TipTap 内容更新时同步高度和宽度
+  const handleTipTapUpdate = (textObj, updateInfo) => {
+    if (!textObj._editing) return;
+
+    const { scrollHeight, contentWidth } = updateInfo;
+    const container = textObj._tipTapContainer;
+    const editorInstance = textObj._editorRef?.current;
+    const editorEl = editorInstance?.getEditor?.()?.options?.element;
+
+    let needsSync = false;
+
+    // 宽度变化（文字换行超出或字体变大）
+    const currentWidth = textObj.width * (textObj.scaleX || 1);
+    // 只允许宽度增加，防止退出编辑时测量错误导致宽度异常
+    if (contentWidth && contentWidth > currentWidth && contentWidth < 2000) {
+      textObj.set({ width: contentWidth });
+      textObj.setCoords();
+      needsSync = true;
+    }
+
+    // 高度变化时同步更新
+    if (scrollHeight !== textObj.height) {
+      const delta = scrollHeight - textObj.height;
+      textObj.set({ height: scrollHeight, top: textObj.top + delta / 2 });
+      textObj.setCoords();
+      needsSync = true;
+    }
+
+    // 同步位置和尺寸到 DOM
+    if (needsSync) {
+      textObj.syncToDOM();
+      textObj.canvas?.requestRenderAll();
+    }
   };
 
   // ─── Lazy loading ────────────────────────────────────────────────────────
@@ -515,6 +787,40 @@ const FabricCanvas = forwardRef(function FabricCanvas(
         obj._domElement.style.width = `${width}px`;
         obj._domElement.style.height = `${height}px`;
       }
+      // 同步 TipTap 编辑器宽度并重新排版
+      if (obj._editorRef?.current) {
+        const editorInstance = obj._editorRef.current;
+        const editor = editorInstance.getEditor?.();
+        const editorEl = editor?.options?.element;
+        const container = obj._tipTapContainer;
+        if (editorEl && container && editor) {
+          const width = obj.width * (obj.scaleX || 1);
+
+          editorEl.style.width = '100%';
+          editorEl.style.minHeight = 'auto';
+          container.style.width = `${width}px`;
+          container.style.minHeight = 'auto';
+
+          if (editor._pauseMeasure) editor._pauseMeasure();
+
+          const html = editor.getHTML();
+          editor.commands.setContent(html, false);
+
+          setTimeout(() => {
+            const newHeight = editorEl.scrollHeight;
+            const currentHeight = obj.height;
+
+            if (newHeight !== currentHeight && newHeight > 0) {
+              const delta = newHeight - currentHeight;
+              obj.set({ height: newHeight, top: obj.top + delta / 2 });
+              obj.setCoords();
+              container.style.minHeight = `${newHeight}px`;
+              obj.canvas?.requestRenderAll();
+            }
+            if (editor._resumeMeasure) editor._resumeMeasure();
+          }, 50);
+        }
+      }
     });
 
     canvas.on('object:modified', (e) => {
@@ -522,6 +828,20 @@ const FabricCanvas = forwardRef(function FabricCanvas(
 
       const obj = e.target;
       if (!obj) return;
+
+      // 对于 PdfTextObject，将 scale 合并到 width/height
+      if (obj instanceof PdfTextObject) {
+        const newWidth = obj.width * (obj.scaleX || 1);
+        const newHeight = obj.height * (obj.scaleY || 1);
+        obj.set({
+          width: newWidth,
+          height: newHeight,
+          scaleX: 1,
+          scaleY: 1,
+        });
+        obj.setCoords();
+        obj.syncToDOM();
+      }
 
       // 更新 zustand 状态（zundo 会自动保存历史）
       const objId = obj._pdfData?.id || obj._newId;
@@ -585,7 +905,17 @@ const FabricCanvas = forwardRef(function FabricCanvas(
     });
 
     canvas.on('object:removed', (e) => {
-      if (e.target.destroy) e.target.destroy();
+      const obj = e.target;
+      // 清理 TipTap 组件
+      if (obj._tipTapRoot) {
+        obj._tipTapRoot.unmount();
+        obj._tipTapRoot = null;
+      }
+      if (obj._tipTapContainer) {
+        obj._tipTapContainer.remove();
+        obj._tipTapContainer = null;
+      }
+      if (obj.destroy) obj.destroy();
     });
 
     // ─── Load elements ──────────────────────────────────────────────────────
@@ -784,6 +1114,9 @@ const FabricCanvas = forwardRef(function FabricCanvas(
 
       const colorStr = `rgb(${r},${g},${b})`;
 
+      // 转换 inlineSpans 为 TipTap JSON
+      const initialContent = convertInlineSpansToTipTap(cleanText, para.inlineSpans, SCALE);
+
       const textObj = new PdfTextObject({
         left: pos.left,
         top: pos.top,
@@ -797,6 +1130,7 @@ const FabricCanvas = forwardRef(function FabricCanvas(
         color: colorStr,
         lineHeight: lineHeightRatio,
         textAlign: para.textAlign || 'left',
+        _richContent: initialContent,
         _pdfData: {
           id: `para-${idx}`,
           originalBbox: [...para.bbox],
@@ -810,34 +1144,99 @@ const FabricCanvas = forwardRef(function FabricCanvas(
       });
       canvas.add(textObj);
 
-      const div = document.createElement('div');
-      div.style.cssText = `
+      // 创建 TipTap 编辑器容器
+      const tipTapContainer = document.createElement('div');
+      tipTapContainer.className = 'tiptap-wrapper';
+      tipTapContainer.style.cssText = `
         position: absolute;
         left: ${pos.left}px;
         top: ${pos.top}px;
         width: ${pos.width}px;
-        height: ${pos.height}px;
+        min-height: ${pos.height}px;
         min-width: 10px;
-        font-size: ${para.fontSize * SCALE}px;
-        font-family: ${fontProps.fontFamily};
-        font-weight: ${fontProps.fontWeight};
-        font-style: ${fontProps.fontStyle};
-        line-height: ${lineHeightRatio};
-        color: ${colorStr};
         background: transparent;
-        border: none;
-        outline: none;
-        padding: 0;
-        margin: 0;
-        white-space: pre;
-        overflow: visible;
         pointer-events: none;
         z-index: ${zIndex};
       `;
-      div.innerText = cleanText;
-      layer.appendChild(div);
-      textObj.bindElement(div);
-      _attachTextEvents(textObj, div);
+      tipTapContainer.dataset.textId = `para-${idx}`;
+      layer.appendChild(tipTapContainer);
+
+      // 使用 createRoot 渲染 TipTap 组件
+      const editorRef = { current: null };
+      const root = createRoot(tipTapContainer);
+
+      const handleEditorReady = () => {
+        // 编辑器准备好后绑定到 PdfTextObject
+        _attachTipTapEvents(textObj, editorRef);
+      };
+
+      const handleBlur = (text, html, richContent) => {
+        // 编辑器失焦时的处理
+        if (textObj._editing) {
+          textObj.exitEditing();
+
+          const canvasInstance = fabricRef.current;
+          if (canvasInstance) canvasInstance.requestRenderAll();
+
+          const textAfterEdit = textObj.getText();
+          const richContentAfterEdit = textObj.getRichContent();
+          const heightAfterEdit = textObj.height;
+          const objId = textObj._pdfData?.id || textObj._newId;
+          if (objId) {
+            isLocalUpdateRef.current = true;
+            const topLeft = textObj.topLeft;
+            updateObject(pageNum, objId, {
+              text: textAfterEdit,
+              richContent: richContentAfterEdit,
+              left: topLeft.x,
+              top: topLeft.y,
+              width: textObj.width,
+              height: heightAfterEdit,
+            });
+          }
+        }
+      };
+
+      const handleUpdate = (updateInfo) => {
+        // TipTap 内容更新时同步高度
+        handleTipTapUpdate(textObj, updateInfo);
+      };
+
+      const handleStyleChange = (style, value) => {
+        // 样式变化时更新 PdfTextObject
+        if (style === 'color') {
+          textObj.color = value;
+        } else if (style === 'fontSize') {
+          textObj.fontSize = value * SCALE;
+        } else if (style === 'fontFamily') {
+          textObj.fontFamily = value;
+        }
+      };
+
+      root.render(
+        <TipTapEditor
+          ref={(el) => { editorRef.current = el; }}
+          content={initialContent}
+          fontSize={para.fontSize * SCALE}
+          fontFamily={fontProps.fontFamily}
+          fontWeight={fontProps.fontWeight}
+          fontStyle={fontProps.fontStyle}
+          color={colorStr}
+          textAlign={para.textAlign || 'left'}
+          lineHeight={lineHeightRatio}
+          width={pos.width}
+          height={pos.height}
+          onEditorReady={handleEditorReady}
+          onBlur={handleBlur}
+          onUpdate={handleUpdate}
+          onStyleChange={handleStyleChange}
+          scale={SCALE}
+        />
+      );
+
+      // 存储 root 引用以便清理
+      textObj._tipTapRoot = root;
+      textObj._tipTapContainer = tipTapContainer;
 
       return textObj;
     };
@@ -1026,7 +1425,8 @@ const FabricCanvas = forwardRef(function FabricCanvas(
               prev.scaleY !== curr.scaleY ||
               prev.text !== curr.text ||
               prev.fontSize !== curr.fontSize ||
-              prev.color !== curr.color) {
+              prev.color !== curr.color ||
+              JSON.stringify(prev.richContent) !== JSON.stringify(curr.richContent)) {
             hasChange = true;
             break;
           }
@@ -1076,6 +1476,14 @@ const FabricCanvas = forwardRef(function FabricCanvas(
               fabricObj.text = stateObj.text;
               if (fabricObj._textElement) {
                 fabricObj._textElement.innerText = stateObj.text;
+              }
+            }
+            // 恢复富文本内容（JSON 格式）
+            if (stateObj.richContent !== undefined) {
+              fabricObj._richContent = stateObj.richContent;
+              // 如果有 TipTap 编辑器，尝试恢复内容
+              if (fabricObj._editorRef?.current) {
+                fabricObj._editorRef.current.setContent(stateObj.richContent);
               }
             }
             // 恢复字体属性

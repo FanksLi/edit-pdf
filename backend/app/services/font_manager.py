@@ -298,19 +298,219 @@ class FontManager:
         builtin = "china-s" if re.search(r"[\u4e00-\u9fff]", text) else "helv"
         page.insert_text((x, y), text, fontname=builtin, fontsize=font_size, color=color)
 
+    def insert_text_line_with_styles(self, page, x, y, text, base_font_name, base_font_size,
+                                      base_color, inline_styles=None):
+        """插入带内联样式的单行文字。
+
+        Args:
+            page: fitz.Page 对象
+            x: 起始 X 坐标
+            y: 基线 Y 坐标
+            text: 文本内容
+            base_font_name: 基础字体名称
+            base_font_size: 基础字号
+            base_color: 基础颜色 (r, g, b)
+            inline_styles: 内联样式列表，每个样式包含:
+                - start: 起始索引
+                - end: 结束索引
+                - bold: 是否加粗
+                - italic: 是否斜体
+                - underline: 是否下划线
+                - color: 颜色覆盖 (r, g, b)
+                - fontSize: 字号覆盖
+        """
+        if inline_styles is None or len(inline_styles) == 0:
+            self.insert_text_line(page, x, y, text, base_font_name, base_font_size, base_color)
+            return
+
+        # 按起始位置排序样式
+        sorted_styles = sorted(inline_styles, key=lambda s: s.get('start', 0))
+
+        # 构建文本片段及其样式
+        segments = []
+        current_pos = 0
+
+        for style in sorted_styles:
+            start = style.get('start', 0)
+            end = style.get('end', len(text))
+
+            # 样式变化前的普通文本（使用基础样式）
+            if start > current_pos:
+                segments.append({
+                    'text': text[current_pos:start],
+                    'bold': False,
+                    'italic': False,
+                    'color': base_color,
+                    'fontSize': base_font_size
+                })
+
+            # 样式覆盖的文本（使用内联样式，其他属性保持基础值）
+            if end > start:
+                seg_style = {
+                    'text': text[start:end],
+                    'bold': style.get('bold', False),
+                    'italic': style.get('italic', False),
+                    'color': tuple(style['color']) if style.get('color') else base_color,
+                    'fontSize': style.get('fontSize', base_font_size),
+                    'fontFamily': style.get('fontFamily', base_font_name)
+                }
+                segments.append(seg_style)
+
+            current_pos = end
+
+        # 剩余文本（使用基础样式）
+        if current_pos < len(text):
+            segments.append({
+                'text': text[current_pos:],
+                'bold': False,
+                'italic': False,
+                'color': base_color,
+                'fontSize': base_font_size
+            })
+
+        # 逐段插入文本
+        current_x = x
+        underline_segments = []  # 记录需要下划线的片段
+
+        for seg in segments:
+            seg_text = seg['text']
+            if not seg_text:
+                continue
+
+            font_size = seg['fontSize']
+            color = seg['color']
+            weight = "bold" if seg['bold'] else "normal"
+            style = "italic" if seg['italic'] else "normal"
+            # 使用内联字体系列或基础字体
+            font_family = seg.get('fontFamily', base_font_name)
+
+            # 查找对应字体文件
+            font_file = self.find_local_font(font_family, weight, style)
+
+            # 插入文本片段
+            def inserter(fname, ffile):
+                page.insert_text((current_x, y), seg_text, fontname=fname, fontfile=ffile,
+                                 fontsize=font_size, color=color)
+
+            inserted = False
+            if font_file:
+                try:
+                    fname = self._get_or_create_fontname(font_file)
+                    inserter(fname, font_file)
+                    inserted = True
+                except Exception:
+                    pass
+
+            if not inserted:
+                # 尝试系统字体（使用内联字体系列）
+                sys_font = find_system_font(font_family)
+                if sys_font:
+                    try:
+                        fname = self._get_or_create_fontname(sys_font)
+                        inserter(fname, sys_font)
+                        inserted = True
+                    except Exception:
+                        pass
+
+            if not inserted:
+                # 回退到内置字体
+                builtin = "china-s" if re.search(r"[\u4e00-\u9fff]", seg_text) else "helv"
+                page.insert_text((current_x, y), seg_text, fontname=builtin,
+                                 fontsize=font_size, color=color)
+
+            # 计算文本宽度并更新 X 位置
+            # 使用实际字体（内联 fontFamily 或 base_font_name）
+            actual_font = font_family
+            text_width = self._get_text_width(seg_text, actual_font, font_size, weight, style)
+            current_x += text_width
+
+        # 绘制下划线（在所有文本插入后）
+        current_x = x
+        current_pos = 0
+        for style in sorted_styles:
+            start = style.get('start', 0)
+            end = style.get('end', len(text))
+
+            if start > current_pos:
+                # 普通文本宽度（使用基础字体）
+                plain_text = text[current_pos:start]
+                current_x += self._get_text_width(plain_text, base_font_name, base_font_size, "normal", "normal")
+
+            if style.get('underline') and end > start:
+                # 获取该片段的字号和文本
+                seg_text = text[start:end]
+                seg_font_size = style.get('fontSize', base_font_size)
+                seg_font_family = style.get('fontFamily', base_font_name)
+
+                # 计算下划线位置（使用内联 fontFamily）
+                width = self._get_text_width(seg_text, seg_font_family, seg_font_size,
+                                             "bold" if style.get('bold') else "normal",
+                                             "italic" if style.get('italic') else "normal")
+
+                # 绘制下划线（基线下方 1-2pt）
+                underline_y = y + 1.5
+                shape = page.new_shape()
+                shape.draw_line((current_x, underline_y), (current_x + width, underline_y))
+                shape.finish(width=0.5, color=style.get('color', base_color))
+                shape.commit()
+                current_x += width
+
+            current_pos = end
+
+    def _get_text_width(self, text, font_name, font_size, weight="normal", style="normal"):
+        """精确计算文本宽度。"""
+        # 查找字体文件
+        font_file = self.find_local_font(font_name, weight, style)
+        if not font_file:
+            font_file = find_system_font(font_name)
+
+        # 使用临时页面精确测量文本宽度
+        try:
+            tmp_doc = fitz.open()
+            tmp_page = tmp_doc.new_page()
+            fname = None
+            if font_file:
+                try:
+                    fname = self._get_or_create_fontname(font_file)
+                    # 插入文本并获取实际宽度
+                    tmp_page.insert_text((0, font_size), text, fontname=fname, fontfile=font_file, fontsize=font_size)
+                except:
+                    pass
+            if not fname:
+                # 回退到内置字体
+                builtin = "china-s" if re.search(r"[\u4e00-\u9fff]", text) else "helv"
+                tmp_page.insert_text((0, font_size), text, fontname=builtin, fontsize=font_size)
+
+            # 获取插入文本的边界框
+            text_rect = tmp_page.get_text("dict")["blocks"][0]["bbox"]
+            width = text_rect[2] - text_rect[0]
+            tmp_doc.close()
+            return width
+        except:
+            # 回退到估算
+            has_chinese = bool(re.search(r"[\u4e00-\u9fff]", text))
+            avg_width = 1.0 if has_chinese else 0.5
+            return len(text) * font_size * avg_width
+
     def insert_textbox(self, page, rect, text, font_file=None, font_name=None,
-                       font_size=12, color=(0, 0, 0), align=0):
-        """在矩形区域内插入自动换行的文字（支持对齐）。"""
+                       font_size=12, color=(0, 0, 0), align=0, line_height=None):
+        """在矩形区域内插入自动换行的文字（支持对齐和行高）。"""
+        # 计算行高倍数（默认 1.2）
+        if line_height is None:
+            line_height = font_size * 1.2
+        line_height_ratio = line_height / font_size if font_size > 0 else 1.2
+
         def inserter(fname, ffile):
             page.insert_textbox(rect, text, fontname=fname, fontfile=ffile,
-                                fontsize=font_size, color=color, align=align)
+                                fontsize=font_size, color=color, align=align,
+                                lineheight=line_height_ratio)
 
         if self._try_insert(inserter, font_file, font_name):
             return
 
         builtin = "china-s" if re.search(r"[\u4e00-\u9fff]", text) else "helv"
         page.insert_textbox(rect, text, fontname=builtin, fontsize=font_size,
-                            color=color, align=align)
+                            color=color, align=align, lineheight=line_height_ratio)
 
     # ── 保存 ────────────────────────────────────────────────
 

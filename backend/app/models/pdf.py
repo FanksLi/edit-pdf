@@ -27,6 +27,7 @@ class Paragraph(BaseModel):
     z_index: int = 0
     tableId: Optional[str] = None
     cellId: Optional[str] = None
+    inlineSpans: Optional[List[dict]] = None  # 内联样式列表
 
 
 class EditItem(BaseModel):
@@ -35,6 +36,18 @@ class EditItem(BaseModel):
     newText: str
     fontSize: float
     origin: Tuple[float, float]
+
+
+class InlineStyle(BaseModel):
+    """内联样式 - 用于段落内局部文字样式"""
+    start: int  # 起始字符索引（包含）
+    end: int    # 结束字符索引（不包含）
+    bold: Optional[bool] = None
+    italic: Optional[bool] = None
+    underline: Optional[bool] = None
+    color: Optional[Tuple[float, float, float]] = None  # RGB (0-1范围)
+    fontSize: Optional[float] = None
+    fontFamily: Optional[str] = None  # 字体名称
 
 
 class ParagraphEditItem(BaseModel):
@@ -47,6 +60,7 @@ class ParagraphEditItem(BaseModel):
     color: Tuple[float, float, float]
     height_delta: float = 0.0  # 新高度 - 原高度（PDF 坐标）
     lineHeight: float = 0.0  # 行间距（PDF 坐标）
+    inlineStyles: List[InlineStyle] = []  # 内联样式列表
 
 
 class UploadResponse(BaseModel):

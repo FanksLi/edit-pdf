@@ -1,0 +1,132 @@
+/* TipTap 编辑器样式 */
+
+.tiptap-wrapper {
+  position: absolute;
+  pointer-events: none;
+}
+
+.tiptap-container {
+  pointer-events: none;
+  overflow: visible;
+}
+
+.tiptap-editor {
+  outline: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tiptap-editor p {
+  margin: 0;
+  padding: 0;
+}
+
+.tiptap-editor p:first-child {
+  margin-top: 0;
+}
+
+.tiptap-editor p:last-child {
+  margin-bottom: 0;
+}
+
+/* 编辑模式时的样式 */
+.tiptap-editor.ProseMirror-focused {
+  pointer-events: auto;
+}
+
+/* 选中文本的高亮样式 */
+.tiptap-editor .ProseMirror-selectednode {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+/* 内联样式标记 */
+.tiptap-editor strong {
+  font-weight: bold !important;
+}
+
+.tiptap-editor em {
+  font-style: italic !important;
+}
+
+.tiptap-editor u {
+  text-decoration: underline !important;
+}
+
+.tiptap-editor s {
+  text-decoration: line-through !important;
+}
+
+/* 防止编辑时出现默认的边框和背景 */
+.tiptap-editor.ProseMirror {
+  min-height: inherit;
+}
+
+/* 气泡菜单样式 */
+.bubble-menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #1f2937;
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* 下拉菜单滚动条样式 */
+.bubble-menu-dropdown {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 #1f2937;
+}
+
+.bubble-menu-dropdown::-webkit-scrollbar {
+  width: 6px;
+}
+
+.bubble-menu-dropdown::-webkit-scrollbar-track {
+  background: #1f2937;
+  border-radius: 3px;
+}
+
+.bubble-menu-dropdown::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 3px;
+}
+
+.bubble-menu-dropdown::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+.bubble-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #9ca3af;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bubble-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.bubble-menu-btn.is-active {
+  background: #3b82f6;
+  color: #fff;
+}
+
+/* 浮动菜单样式（可选） */
+.tiptap-floating-menu {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
